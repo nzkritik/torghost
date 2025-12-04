@@ -7,6 +7,11 @@ import os
 import sys
 import subprocess
 
+# Check if running as sudo
+if os.geteuid() != 0:
+    print("This script requires sudo privileges.")
+    os.execvp('sudo', ['sudo', sys.executable] + sys.argv)
+
 # Venv and dependency management
 venv_dir = os.path.join(os.path.expanduser('~'), '.venv')
 if not os.path.exists(venv_dir):
