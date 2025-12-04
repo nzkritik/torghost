@@ -2,18 +2,19 @@
 #!/bin/bash
 
 clear
-echo "******* Torghost installer ********"
+echo "******* Torghost installer for Arch Linux ********"
 echo -e "\033[31mTorghost made by Technical Dada\033[0m"
+echo -e "\033[31mUpdated for Arch by nzKritiK\033[0m"
 echo
 
-echo -e "\033[32m=====> Installing tor bundle \033[0m"
-sudo apt-get install tor -y
+# Install dependencies for Arch Linux
+echo -e "\033[32m=====> Installing dependencies using pacman \033[0m"
+sudo pacman -S --noconfirm tor python-pip
 
-echo -e "\033[32m=====> Installing dependencies \033[0m"
 sudo pip3 install stem
 
 echo -e "\033[32m=====> Installing TorGhost \033[0m"
-sudo cp torghost.py /usr/local/bin/torghost
+sudo cp torghost /usr/local/bin/torghost
 sudo chmod +x /usr/local/bin/torghost
 
 echo -e "\033[32m=====> Done \033[0m"

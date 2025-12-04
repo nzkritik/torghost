@@ -6,8 +6,38 @@ TorGhost - Clean and Working Version
 import os
 import sys
 import subprocess
+
+# Venv and dependency management
+venv_dir = os.path.join(os.path.expanduser('~'), '.venv')
+if not os.path.exists(venv_dir):
+    print(f"Creating virtual environment in {venv_dir}...")
+    try:
+        subprocess.run([sys.executable, '-m', 'venv', venv_dir], check=True)
+    except subprocess.CalledProcessError:
+        print("Failed to create virtual environment. Please ensure the 'venv' module is available.")
+        sys.exit(1)
+
+venv_python = os.path.join(venv_dir, 'bin', 'python')
+if sys.executable != os.path.abspath(venv_python):
+    print("Relaunching in virtual environment...")
+    os.execv(venv_python, [venv_python] + sys.argv)
+
+# The script now runs inside the venv. Deactivation is not needed;
+# when the script exits, the process ends, and the parent shell is unaffected.
+
+# Install/Upgrade dependencies
+try:
+    subprocess.run(
+        [sys.executable, '-m', 'pip', 'install', '--upgrade', 'stem'], 
+        check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
+    )
+except subprocess.CalledProcessError:
+    print("Failed to install dependencies. Please check your internet connection and pip configuration.")
+    sys.exit(1)
+
 import time
 import signal
+import shutil
 from stem import Signal
 from stem.control import Controller
 
@@ -38,7 +68,7 @@ def shutdown():
 def logo():
     os.system("clear")
     print(f"{bcolors.RED}{bcolors.BOLD}")
-    print("""
+    print(r"""
       _____           ____ _               _
      |_   _|__  _ __ / ___| |__   ___  ___| |_
        | |/ _ \| '__| |  _| '_ \ / _ \/ __| __|
@@ -81,10 +111,15 @@ DNSPort 53
 ControlPort 9051
 """
     
-    with open('/etc/tor/torrc', 'a') as f:
-        f.write(torrc_content)
+    with open('/etc/tor/torrc', 'r') as f:
+        if '## TorGhost Configuration' not in f.read():
+            with open('/etc/tor/torrc', 'a') as f_append:
+                f_append.write(torrc_content)
     
     # Configure DNS
+    if not os.path.exists('/etc/resolv.conf.bak-torghost'):
+        shutil.copy('/etc/resolv.conf', '/etc/resolv.conf.bak-torghost')
+
     with open('/etc/resolv.conf', 'w') as f:
         f.write("nameserver 127.0.0.1\n")
     
@@ -92,7 +127,7 @@ ControlPort 9051
     subprocess.run(['systemctl', 'start', 'tor'])
     
     # Setup iptables
-    tor_uid = subprocess.run(['id', '-u', 'debian-tor'], 
+    tor_uid = subprocess.run(['id', '-u', 'tor'], 
                            capture_output=True, text=True).stdout.strip()
     
     iptables_script = f"""
@@ -115,6 +150,8 @@ iptables -A OUTPUT -j REJECT
     
     subprocess.run(['bash', '-c', iptables_script])
     print(f"{t()} CURRENT IP: {bcolors.GREEN}{get_ip()}{bcolors.ENDC}")
+    print(f"{t()} {bcolors.GREEN}TorGhost started successfully.{bcolors.ENDC} Your traffic is being routed through Tor.")
+    print(f"{t()} Run 'sudo torghost stop' to revert all changes.")
 
 
 def stop_torghost():
@@ -129,9 +166,32 @@ iptables -F
 iptables -X
 """])
     
+    # Stop tor service
+    subprocess.run(['systemctl', 'stop', 'tor'])
+
+    # Clean up torrc
+    torrc_content_to_remove = """
+## TorGhost Configuration
+VirtualAddrNetwork 10.0.0.0/10
+AutomapHostsOnResolve 1
+TransPort 9040
+DNSPort 53
+ControlPort 9051
+"""
+    with open('/etc/tor/torrc', 'r') as f:
+        original_torrc = f.read()
+    
+    cleaned_torrc = original_torrc.replace(torrc_content_to_remove, "")
+    
+    with open('/etc/tor/torrc', 'w') as f:
+        f.write(cleaned_torrc)
+        
     # Restore network
-    subprocess.run(['systemctl', 'restart', 'NetworkManager'])
+    if os.path.exists('/etc/resolv.conf.bak-torghost'):
+        shutil.move('/etc/resolv.conf.bak-torghost', '/etc/resolv.conf')
+        
     print(f"{t()} CURRENT IP: {bcolors.GREEN}{get_ip()}{bcolors.ENDC}")
+    print(f"{t()} {bcolors.YELLOW}TorGhost stopped.{bcolors.ENDC} Your traffic is no longer routed through Tor.")
 
 
 def switch_tor():
@@ -157,6 +217,11 @@ if len(sys.argv) < 2:
     usage()
 
 command = sys.argv[1].lower()
+
+if command in ['start', 'stop', 'switch']:
+    if os.geteuid() != 0:
+        print(f"{bcolors.RED}{bcolors.BOLD}You must be root to run this command.{bcolors.ENDC}")
+        sys.exit(1)
 
 if command == "start":
     logo()
