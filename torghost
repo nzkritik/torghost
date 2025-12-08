@@ -79,7 +79,7 @@ def logo():
        | |/ _ \| '__| |  _| '_ \ / _ \/ __| __|
        | | (_) | |  | |_| | | | | (_) \__ \ |_
        |_|\___/|_|   \____|_| |_|\___/|___/\__|
-    v2.0 - Koushik Pal
+    v3.0 - rewritten by nzkritik for Arch Linux
     """)
     print(f"{bcolors.ENDC}")
 
@@ -107,8 +107,10 @@ def get_ip():
 
 def start_torghost():
     # Configure torrc
-    torrc_content = """
-## TorGhost Configuration
+    torrc_path = '/etc/tor/torrc'
+    torrc_marker = '## TorGhost Configuration'
+    torrc_content = f"""
+{torrc_marker}
 VirtualAddrNetwork 10.0.0.0/10
 AutomapHostsOnResolve 1
 TransPort 9040
@@ -116,25 +118,47 @@ DNSPort 53
 ControlPort 9051
 """
     
-    with open('/etc/tor/torrc', 'r') as f:
-        if '## TorGhost Configuration' not in f.read():
-            with open('/etc/tor/torrc', 'a') as f_append:
-                f_append.write(torrc_content)
+    try:
+        with open(torrc_path, 'r') as f:
+            existing = f.read()
+        
+        # Only append if marker not already present
+        if torrc_marker not in existing:
+            with open(torrc_path, 'a') as f:
+                f.write(torrc_content)
+    except IOError as e:
+        print(f"{bcolors.RED}Error modifying torrc: {e}{bcolors.ENDC}")
+        sys.exit(1)
     
-    # Configure DNS
-    if not os.path.exists('/etc/resolv.conf.bak-torghost'):
-        shutil.copy('/etc/resolv.conf', '/etc/resolv.conf.bak-torghost')
+    # Configure DNS - create backup only once
+    resolv_backup = '/etc/resolv.conf.bak-torghost'
+    try:
+        if not os.path.exists(resolv_backup):
+            shutil.copy('/etc/resolv.conf', resolv_backup)
 
-    with open('/etc/resolv.conf', 'w') as f:
-        f.write("nameserver 127.0.0.1\n")
+        with open('/etc/resolv.conf', 'w') as f:
+            f.write("nameserver 127.0.0.1\n")
+    except IOError as e:
+        print(f"{bcolors.RED}Error configuring DNS: {e}{bcolors.ENDC}")
+        sys.exit(1)
     
     # Start services
-    subprocess.run(['systemctl', 'start', 'tor'])
+    try:
+        subprocess.run(['systemctl', 'start', 'tor'], check=True, 
+                      stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    except subprocess.CalledProcessError:
+        print(f"{bcolors.RED}Failed to start Tor service.{bcolors.ENDC}")
+        sys.exit(1)
     
-    # Setup iptables
-    tor_uid = subprocess.run(['id', '-u', 'tor'], 
-                           capture_output=True, text=True).stdout.strip()
+    # Setup iptables (IPv4 and IPv6)
+    try:
+        tor_uid = subprocess.run(['id', '-u', 'tor'], 
+                               capture_output=True, text=True, check=True).stdout.strip()
+    except subprocess.CalledProcessError:
+        print(f"{bcolors.RED}Failed to get Tor UID.{bcolors.ENDC}")
+        sys.exit(1)
     
+    # IPv4 rules
     iptables_script = f"""
 iptables -F
 iptables -t nat -F
@@ -153,15 +177,46 @@ iptables -A OUTPUT -m owner --uid-owner {tor_uid} -j ACCEPT
 iptables -A OUTPUT -j REJECT
 """
     
-    subprocess.run(['bash', '-c', iptables_script])
+    # IPv6 rules
+    ip6tables_script = f"""
+ip6tables -F
+ip6tables -t nat -F
+ip6tables -t nat -A OUTPUT -m owner --uid-owner {tor_uid} -j RETURN
+ip6tables -t nat -A OUTPUT -p udp --dport 53 -j REDIRECT --to-ports 53
+ip6tables -t nat -A OUTPUT -p tcp --dport 53 -j REDIRECT --to-ports 53
+ip6tables -t nat -A OUTPUT -d ::1/128 -j RETURN
+ip6tables -t nat -A OUTPUT -d fc00::/7 -j RETURN
+ip6tables -t nat -A OUTPUT -p tcp --syn -j REDIRECT --to-ports 9040
+ip6tables -A OUTPUT -m state --state ESTABLISHED,RELATED -j ACCEPT
+ip6tables -A OUTPUT -d ::1/128 -j ACCEPT
+ip6tables -A OUTPUT -d fc00::/7 -j ACCEPT
+ip6tables -A OUTPUT -m owner --uid-owner {tor_uid} -j ACCEPT
+ip6tables -A OUTPUT -j REJECT
+"""
+    
+    try:
+        subprocess.run(['bash', '-c', iptables_script], check=True,
+                      stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    except subprocess.CalledProcessError:
+        print(f"{bcolors.RED}Failed to apply IPv4 iptables rules.{bcolors.ENDC}")
+        sys.exit(1)
+    
+    try:
+        subprocess.run(['bash', '-c', ip6tables_script], check=True,
+                      stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    except subprocess.CalledProcessError:
+        print(f"{bcolors.YELLOW}Warning: Failed to apply IPv6 iptables rules. IPv6 traffic may not be routed through Tor.{bcolors.ENDC}")
+    
     print(f"{t()} CURRENT IP: {bcolors.GREEN}{get_ip()}{bcolors.ENDC}")
     print(f"{t()} {bcolors.GREEN}TorGhost started successfully.{bcolors.ENDC} Your traffic is being routed through Tor.")
+    print(f"{t()} {bcolors.YELLOW}Note: All DNS (IPv4 & IPv6) and TCP traffic routed through Tor.{bcolors.ENDC}")
     print(f"{t()} Run 'sudo torghost stop' to revert all changes.")
 
 
 def stop_torghost():
-    # Flush iptables
-    subprocess.run(['bash', '-c', """
+    # Flush iptables (IPv4 and IPv6)
+    try:
+        subprocess.run(['bash', '-c', """
 iptables -P INPUT ACCEPT
 iptables -P FORWARD ACCEPT
 iptables -P OUTPUT ACCEPT
@@ -169,31 +224,65 @@ iptables -t nat -F
 iptables -t mangle -F
 iptables -F
 iptables -X
-"""])
+"""], check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    except subprocess.CalledProcessError:
+        print(f"{bcolors.YELLOW}Warning: Failed to flush IPv4 iptables.{bcolors.ENDC}")
+    
+    try:
+        subprocess.run(['bash', '-c', """
+ip6tables -P INPUT ACCEPT
+ip6tables -P FORWARD ACCEPT
+ip6tables -P OUTPUT ACCEPT
+ip6tables -t nat -F
+ip6tables -t mangle -F
+ip6tables -F
+ip6tables -X
+"""], check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    except subprocess.CalledProcessError:
+        print(f"{bcolors.YELLOW}Warning: Failed to flush IPv6 iptables.{bcolors.ENDC}")
     
     # Stop tor service
-    subprocess.run(['systemctl', 'stop', 'tor'])
+    try:
+        subprocess.run(['systemctl', 'stop', 'tor'], check=True,
+                      stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    except subprocess.CalledProcessError:
+        print(f"{bcolors.YELLOW}Warning: Failed to stop Tor service.{bcolors.ENDC}")
 
     # Clean up torrc
-    torrc_content_to_remove = """
-## TorGhost Configuration
-VirtualAddrNetwork 10.0.0.0/10
-AutomapHostsOnResolve 1
-TransPort 9040
-DNSPort 53
-ControlPort 9051
-"""
-    with open('/etc/tor/torrc', 'r') as f:
-        original_torrc = f.read()
+    torrc_path = '/etc/tor/torrc'
+    torrc_marker = '## TorGhost Configuration'
     
-    cleaned_torrc = original_torrc.replace(torrc_content_to_remove, "")
-    
-    with open('/etc/tor/torrc', 'w') as f:
-        f.write(cleaned_torrc)
+    try:
+        with open(torrc_path, 'r') as f:
+            lines = f.readlines()
+        
+        # Remove lines from marker to next blank line
+        in_block = False
+        cleaned_lines = []
+        for line in lines:
+            if torrc_marker in line:
+                in_block = True
+                continue
+            if in_block and line.strip() == '':
+                in_block = False
+                continue
+            if not in_block:
+                cleaned_lines.append(line)
+        
+        with open(torrc_path, 'w') as f:
+            f.writelines(cleaned_lines)
+    except IOError as e:
+        print(f"{bcolors.YELLOW}Warning: Failed to clean torrc: {e}{bcolors.ENDC}")
         
     # Restore network
-    if os.path.exists('/etc/resolv.conf.bak-torghost'):
-        shutil.move('/etc/resolv.conf.bak-torghost', '/etc/resolv.conf')
+    resolv_backup = '/etc/resolv.conf.bak-torghost'
+    if os.path.exists(resolv_backup):
+        try:
+            shutil.move(resolv_backup, '/etc/resolv.conf')
+        except IOError as e:
+            print(f"{bcolors.YELLOW}Warning: Failed to restore resolv.conf: {e}{bcolors.ENDC}")
+    else:
+        print(f"{bcolors.YELLOW}Warning: Backup resolv.conf not found. DNS may need manual restoration.{bcolors.ENDC}")
         
     print(f"{t()} CURRENT IP: {bcolors.GREEN}{get_ip()}{bcolors.ENDC}")
     print(f"{t()} {bcolors.YELLOW}TorGhost stopped.{bcolors.ENDC} Your traffic is no longer routed through Tor.")
@@ -215,7 +304,7 @@ def show_status():
     print(f"Current IP: {ip}")
 
 
-# Main execution
+# Main execution - remove redundant root check
 signal.signal(signal.SIGINT, sigint_handler)
 
 if len(sys.argv) < 2:
