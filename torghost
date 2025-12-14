@@ -324,6 +324,9 @@ IPTABLESSCRIPT = """
 iptables -F
 iptables -t nat -F
 
+# Print existing nat OUTPUT rules (diagnostic — preserved in the log)
+iptables -t nat -L OUTPUT -n --line-numbers
+
 # Exempt root (uid 0) from NAT redirection (avoid redirecting critical system traffic)
 iptables -t nat -I OUTPUT -m owner --uid-owner 0 -j RETURN
 
@@ -345,12 +348,12 @@ iptables -t nat -A OUTPUT -d 100.64.0.0/10 -j RETURN
 iptables -t nat -A OUTPUT -d 169.254.0.0/16 -j RETURN
 iptables -t nat -A OUTPUT -d 224.0.0.0/4 -j RETURN
 
-# Redirect DNS (UDP & TCP) to Tor DNSPort (dns_port placeholder)
-iptables -t nat -A OUTPUT -p udp --dport 53 -j REDIRECT --to-ports {dns_port}
-iptables -t nat -A OUTPUT -p tcp --dport 53 -j REDIRECT --to-ports {dns_port}
+# Redirect DNS (UDP & TCP) to Tor DNSPort — only for non-tor owners
+iptables -t nat -A OUTPUT -p udp --dport 53 -m owner ! --uid-owner {tor_uid} -j REDIRECT --to-ports {dns_port}
+iptables -t nat -A OUTPUT -p tcp --dport 53 -m owner ! --uid-owner {tor_uid} -j REDIRECT --to-ports {dns_port}
 
-# Redirect outgoing TCP connections to Tor TransPort
-iptables -t nat -A OUTPUT -p tcp --syn -j REDIRECT --to-ports 9040
+# Redirect outgoing TCP connections to Tor TransPort — only for non-tor owners
+iptables -t nat -A OUTPUT -p tcp --syn -m owner ! --uid-owner {tor_uid} -j REDIRECT --to-ports 9040
 
 # Filter rules: allow established and exempted traffic, block the rest
 iptables -A OUTPUT -m state --state ESTABLISHED,RELATED -j ACCEPT
