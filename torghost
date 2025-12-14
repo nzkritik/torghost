@@ -361,6 +361,67 @@ iptables -A OUTPUT -m owner --uid-owner {tor_uid} -j ACCEPT
 iptables -A OUTPUT -j REJECT
 """
 
+def ensure_cookie_auth_in_torrc():
+	"""
+	Ensure torrc contains CookieAuthentication and CookieAuthFile settings.
+	Idempotent: creates a backup if it modifies the file.
+	"""
+	try:
+		with open(TORRC_PATH, 'r') as f:
+			data = f.read()
+	except Exception as e:
+		warn(f"Could not read {TORRC_PATH}: {e}")
+		return False
+
+	orig = data
+	changed = False
+
+	if not re.search(r'^\s*CookieAuthentication\s+\d+', data, flags=re.M):
+		data += "\n# TorGhost: enable cookie auth\nCookieAuthentication 1\n"
+		changed = True
+
+	# prefer explicit cookie path that systemd Tor uses
+	if not re.search(r'^\s*CookieAuthFile\s+', data, flags=re.M):
+		data += "CookieAuthFile /run/tor/control.authcookie\n"
+		changed = True
+
+	if changed:
+		try:
+			# create a timestamped backup to avoid clobbering earlier backups
+			backup = TORRC_PATH + f'.bak-torghost-{int(time.time())}'
+			shutil.copy(TORRC_PATH, backup)
+			with open(TORRC_PATH, 'w') as f:
+				f.write(data)
+			success(f"Updated {TORRC_PATH} to enable CookieAuthentication (backup: {backup}).")
+			return True
+		except Exception as e:
+			warn(f"Failed to update {TORRC_PATH}: {e}")
+			return False
+	return True
+
+def wait_for_cookie(cookie_path='/run/tor/control.authcookie', timeout=30):
+	"""
+	Wait for Tor control auth cookie to exist and ensure restrictive perms.
+	Returns True if cookie is available within timeout, False otherwise.
+	"""
+	deadline = time.time() + timeout
+	while time.time() < deadline:
+		if os.path.exists(cookie_path):
+			try:
+				os.chown(cookie_path, 0, 0)
+			except Exception:
+				# ignore if chown fails; running as root is expected
+				pass
+			try:
+				os.chmod(cookie_path, 0o600)
+			except Exception:
+				pass
+			info(f"Found Tor control auth cookie: {cookie_path}")
+			return True
+		time.sleep(1)
+	warn(f"Timeout waiting for Tor control auth cookie at {cookie_path}")
+	return False
+
 # --- Core operational functions ----------------------------------------------
 def start_torghost():
     """
