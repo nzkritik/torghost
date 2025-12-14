@@ -26,6 +26,7 @@ import shutil
 import socket  # added for port checks
 import threading  # new: used for check-leak monitor
 import re  # new: for parsing Tor bootstrap progress
+import json  # new: used for checkpoint payloads
 
 # --- Third-party dependency check -------------------------------------------
 # 'stem' is required to control the Tor process via its control port and to
@@ -321,6 +322,8 @@ def stop_docker_and_wait(timeout=10):
         if not is_docker_active():
             info("Docker not active; skipping stop.")
             return
+        # create checkpoint before stopping Docker
+        create_checkpoint('docker_prestop', {'note':'stopping docker to avoid NAT interference'})
         info("Stopping Docker to avoid Docker/ADDRTYPE NAT interference...")
         subprocess.run(['systemctl', 'stop', 'docker'], check=False)
         deadline = time.time() + timeout
@@ -330,8 +333,9 @@ def stop_docker_and_wait(timeout=10):
                     with open(DOCKER_STOP_MARKER, 'w') as f:
                         f.write('stopped\n')
                 except Exception:
-                    # non-fatal
                     pass
+                # record checkpoint that we did stop docker
+                create_checkpoint('docker_stopped', {'time': int(time.time())})
                 success("Docker stopped (marker written).")
                 # --- best-effort: remove PREROUTING ADDRTYPE -> DOCKER if present ---
                 try:
@@ -597,7 +601,10 @@ def ensure_cookie_auth_in_torrc():
 
     # Backup and write
     try:
-        backup = TORRC_PATH + f'.bak-torghost-{int(time.time())}'
+        # use safe join to create backup filename in same directory
+        dirname = os.path.dirname(TORRC_PATH) or '/'
+        base = os.path.basename(TORRC_PATH)
+        backup = os.path.join(dirname, f"{base}.bak-torghost-{int(time.time())}")
         shutil.copy(TORRC_PATH, backup)
         with open(TORRC_PATH, 'w') as f:
             f.write(new_data)
@@ -857,13 +864,6 @@ def start_torghost():
                     if '127.0.0.53' in txt:
                         is_stub = True
             except Exception:
-                # ignore read failures here
-                pass
-        if is_stub:
-            error(
-                "/etc/resolv.conf appears to be the systemd-resolved stub (nameserver 127.0.0.53) or symlinked to the resolver.\n"
-                "TorGhost will not overwrite the system resolver while systemd-resolved is active. Please ensure systemd-resolved is stopped/disabled and /etc/resolv.conf is writable, then retry.\n"
-                "Example remediation:\n"
                 "  sudo systemctl stop systemd-resolved\n"
                 "  sudo systemctl disable --now systemd-resolved\n"
                 "  sudo rm /etc/resolv.conf  # if it's a symlink to the stub (be careful!)\n"
@@ -925,6 +925,18 @@ def start_torghost():
     # --- Apply iptables rules ---------------------------------------------
     info("Applying IPv4 iptables rules to route traffic through Tor...")
 
+    # Safety: save current iptables state so we can roll back exactly on stop
+    try:
+        snapshot = save_iptables_snapshot()
+        if snapshot.get('ipv4') or snapshot.get('ipv6'):
+            write_latest_checkpoint(snapshot)
+            create_checkpoint('iptables_saved', snapshot)
+            info(f"Saved pre-change iptables snapshot to {snapshot.get('ipv4')} and {snapshot.get('ipv6')}")
+        else:
+            warn("Could not save iptables snapshot before applying changes.")
+    except Exception as e:
+        warn(f"Failed to snapshot iptables before applying changes: {e}")
+
     # Safety check: abort if there are existing nat REDIRECT rules that may cause loops.
     if detect_nat_conflicts():
         error("Existing NAT/REDIRECT rules detected that may conflict with TorGhost. Aborting to avoid creating a TransPort/NAT loop. Inspect `iptables -t nat -L OUTPUT -n --line-numbers` and remove conflicting rules before retrying.", fatal=True)
@@ -961,7 +973,7 @@ def stop_torghost(monitor=False, interval=10):
     interactive monitoring loop showing iptables / nat / ip6tables / resolv.conf
     until the user types 'q' or presses Ctrl-C, then continue with cleanup.
     """
-    # --- Stop Tor service (moved before flushing iptables) ---------------
+    # --- Stop Tor service (moved before restoring iptables) ---------------
     info("Stopping Tor service (systemctl stop tor)...")
     try:
         subprocess.run(['systemctl', 'stop', 'tor'], check=True,
@@ -970,21 +982,34 @@ def stop_torghost(monitor=False, interval=10):
     except subprocess.CalledProcessError:
         warn("Failed to stop Tor service; it may already be stopped or not installed.")
 
-    # --- Flush IPv4 iptables ----------------------------------------------
-    info("Flushing IPv4 iptables and restoring default ACCEPT policies...")
+    # --- Try to restore iptables from checkpoint (transactional rollback) -
+    restored = False
     try:
-        subprocess.run(['bash', '-c', """
-        iptables -P INPUT ACCEPT
-        iptables -P FORWARD ACCEPT
-        iptables -P OUTPUT ACCEPT
-        iptables -t nat -F
-        iptables -t mangle -F
-        iptables -F
-        iptables -X
-        """], check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-        success("IPv4 firewall flushed.")
-    except subprocess.CalledProcessError:
-        warn("Failed to flush IPv4 iptables; manual intervention may be required.")
+        restored = restore_iptables_snapshot()
+        if restored:
+            info("Restored iptables/ip6tables from torghost checkpoint.")
+        else:
+            info("No iptables checkpoint found; falling back to full flush.")
+    except Exception as e:
+        warn(f"Failed to restore iptables snapshot: {e}")
+        restored = False
+
+    # If no checkpoint available, fall back to original flush behavior
+    if not restored:
+        info("Flushing IPv4 iptables and restoring default ACCEPT policies...")
+        try:
+            subprocess.run(['bash', '-c', """
+            iptables -P INPUT ACCEPT
+            iptables -P FORWARD ACCEPT
+            iptables -P OUTPUT ACCEPT
+            iptables -t nat -F
+            iptables -t mangle -F
+            iptables -F
+            iptables -X
+            """], check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            success("IPv4 firewall flushed.")
+        except subprocess.CalledProcessError:
+            warn("Failed to flush IPv4 iptables; manual intervention may be required.")
 
     # --- Clean up torrc ---------------------------------------------------
     # Ensure torrc path/marker are defined (use module constants)
@@ -1420,6 +1445,102 @@ def wait_for_bootstrap(timeout=120, poll_interval=2):
     except Exception as e:
         warn(f"Failed to connect to Tor control port for bootstrap check: {e}")
         return False
+
+# --- Checkpoint / transactional rollback helpers --------------------------
+CHECKPOINT_DIR = '/run/torghost'
+LATEST_CHECKPOINT = os.path.join(CHECKPOINT_DIR, 'latest.json')
+
+def ensure_checkpoint_dir():
+	"""Ensure the runtime directory for torghost checkpoints exists."""
+	try:
+		os.makedirs(CHECKPOINT_DIR, exist_ok=True)
+	except Exception as e:
+		warn(f"Could not create checkpoint dir {CHECKPOINT_DIR}: {e}")
+
+def create_checkpoint(name, payload):
+	"""Write an individual JSON checkpoint file (best-effort)."""
+	try:
+		ensure_checkpoint_dir()
+		fn = os.path.join(CHECKPOINT_DIR, f"{name}-{int(time.time())}.json")
+		with open(fn, 'w') as f:
+			json.dump(payload, f)
+		return fn
+	except Exception as e:
+		warn(f"Failed to write checkpoint {name}: {e}")
+		return None
+
+def save_iptables_snapshot():
+	"""
+	Save current iptables and ip6tables state to files and return their paths.
+	These files are used to restore system state on stop.
+	"""
+	ensure_checkpoint_dir()
+	ts = int(time.time())
+	ipv4 = os.path.join(CHECKPOINT_DIR, f"iptables.before.{ts}.rules")
+	ipv6 = os.path.join(CHECKPOINT_DIR, f"ip6tables.before.{ts}.rules")
+	try:
+		subprocess.run(['bash', '-c', f'iptables-save -c > "{ipv4}"'], check=False)
+	except Exception as e:
+		warn(f"Failed to save iptables state: {e}")
+		ipv4 = None
+	try:
+		subprocess.run(['bash', '-c', f'ip6tables-save -c > "{ipv6}"'], check=False)
+	except Exception as e:
+		warn(f"Failed to save ip6tables state: {e}")
+		ipv6 = None
+	return {'ipv4': ipv4, 'ipv6': ipv6, 'time': ts}
+
+def write_latest_checkpoint(snapshot):
+	"""Record the latest snapshot paths to a known JSON file for restore."""
+	try:
+		ensure_checkpoint_dir()
+		with open(LATEST_CHECKPOINT, 'w') as f:
+			json.dump(snapshot, f)
+		return True
+	except Exception as e:
+		warn(f"Could not write latest checkpoint: {e}")
+		return False
+
+def restore_iptables_snapshot():
+	"""
+	Restore iptables/ip6tables from the latest checkpoint if present.
+	Returns True if restoration was attempted (success or failure), False if no checkpoint found.
+	"""
+	if not os.path.exists(LATEST_CHECKPOINT):
+		return False
+	try:
+		with open(LATEST_CHECKPOINT, 'r') as f:
+			data = json.load(f)
+		ipv4 = data.get('ipv4')
+		ipv6 = data.get('ipv6')
+		ok = False
+		# Restore IPv4 if snapshot exists
+		if ipv4 and os.path.exists(ipv4):
+			info(f"Restoring iptables state from {ipv4} ...")
+			r = subprocess.run(['bash', '-c', f'iptables-restore < "{ipv4}"'], capture_output=True, text=True)
+			if r.returncode != 0:
+				warn(f"iptables-restore failed: {r.stderr.strip()}")
+			else:
+				success("iptables state restored from checkpoint.")
+			ok = True
+		# Restore IPv6 if snapshot exists
+		if ipv6 and os.path.exists(ipv6):
+			info(f"Restoring ip6tables state from {ipv6} ...")
+			r2 = subprocess.run(['bash', '-c', f'ip6tables-restore < "{ipv6}"'], capture_output=True, text=True)
+			if r2.returncode != 0:
+				warn(f"ip6tables-restore failed: {r2.stderr.strip()}")
+			else:
+				success("ip6tables state restored from checkpoint.")
+			ok = True
+		# remove latest checkpoint after attempting restore
+		try:
+			os.remove(LATEST_CHECKPOINT)
+		except Exception:
+			pass
+		return ok
+	except Exception as e:
+		warn(f"Failed to restore iptables snapshot: {e}")
+		return False
 
 # --- Main execution flow ----------------------------------------------------
 # Install a SIGINT handler to allow graceful exit with Ctrl-C.
