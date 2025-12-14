@@ -74,12 +74,23 @@ DEV_WARNING = r"""
 """
 
 def print_dev_warning():
-	"""Print the development warning banner to the terminal."""
+	"""Print the development warning banner to the terminal and pause briefly."""
 	try:
 		print(f"{bcolors.RED}{bcolors.BOLD}{DEV_WARNING}{bcolors.ENDC}")
+		# Ensure output is visible immediately, then pause for 5 seconds
+		try:
+			sys.stdout.flush()
+		except Exception:
+			pass
+		time.sleep(5)
 	except Exception:
 		# fallback plain output if coloring fails
 		print(DEV_WARNING)
+		try:
+			sys.stdout.flush()
+		except Exception:
+			pass
+		time.sleep(5)
 
 # User feedback helper functions (timestamped, colored)
 def info(msg):
