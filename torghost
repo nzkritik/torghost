@@ -361,28 +361,78 @@ iptables -A OUTPUT -m owner --uid-owner {tor_uid} -j ACCEPT
 iptables -A OUTPUT -j REJECT
 """
 
+def choose_cookie_path():
+	"""
+	Choose a sensible control cookie path for this system.
+	Prefer /run/tor if that runtime directory exists, otherwise fall back
+	to the persistent DataDirectory location under /var/lib/tor.
+	"""
+	if os.path.isdir('/run/tor'):
+		return '/run/tor/control.authcookie'
+	if os.path.isdir('/var/lib/tor'):
+		# many distributions use this name for the cookie inside DataDirectory
+		return '/var/lib/tor/control_auth_cookie'
+	# fallback (Tor may still fail if parent dir doesn't exist)
+	return '/run/tor/control.authcookie'
+
+def create_cookie_parent_dir(cookie_path):
+	"""
+	Ensure the parent directory of cookie_path exists with safe perms.
+	If a 'tor' user exists, chown the directory to that user to allow Tor to write.
+	Non-fatal: just logs warnings if creation/ownership fails.
+	"""
+	parent = os.path.dirname(cookie_path)
+	try:
+		if not os.path.exists(parent):
+			info(f"Creating cookie parent dir {parent}")
+			os.makedirs(parent, exist_ok=True)
+			# try to set ownership to 'tor' user if it exists
+			try:
+				uid = int(subprocess.run(['id', '-u', 'tor'], capture_output=True, text=True).stdout.strip())
+				gid = int(subprocess.run(['id', '-g', 'tor'], capture_output=True, text=True).stdout.strip())
+				os.chown(parent, uid, gid)
+			except Exception:
+				# best effort; may be okay for systemd-managed runtime dirs
+				pass
+			try:
+				os.chmod(parent, 0o700)
+			except Exception:
+				pass
+		else:
+			info(f"Cookie parent dir exists: {parent}")
+	except Exception as e:
+		warn(f"Failed to create/prepare cookie parent directory {parent}: {e}")
+
 def ensure_cookie_auth_in_torrc():
 	"""
-	Ensure torrc contains CookieAuthentication and CookieAuthFile settings.
-	Idempotent: creates a backup if it modifies the file.
+	Ensure torrc contains CookieAuthentication and a usable CookieAuthFile.
+	Chooses the cookie path with choose_cookie_path() and writes/updates
+	the torrc idempotently. Returns the chosen cookie path on success, or
+	None on failure.
 	"""
 	try:
 		with open(TORRC_PATH, 'r') as f:
 			data = f.read()
 	except Exception as e:
 		warn(f"Could not read {TORRC_PATH}: {e}")
-		return False
+		return None
 
-	orig = data
+	cookie_path = choose_cookie_path()
 	changed = False
 
+	# Ensure CookieAuthentication is enabled
 	if not re.search(r'^\s*CookieAuthentication\s+\d+', data, flags=re.M):
-		data += "\n# TorGhost: enable cookie auth\nCookieAuthentication 1\n"
+		data = data.rstrip() + "\n# TorGhost: enable cookie auth\nCookieAuthentication 1\n"
 		changed = True
 
-	# prefer explicit cookie path that systemd Tor uses
-	if not re.search(r'^\s*CookieAuthFile\s+', data, flags=re.M):
-		data += "CookieAuthFile /run/tor/control.authcookie\n"
+	# Replace existing CookieAuthFile if present, otherwise append chosen path
+	if re.search(r'^\s*CookieAuthFile\s+.+$', data, flags=re.M):
+		new = re.sub(r'^\s*CookieAuthFile\s+.+$', f'CookieAuthFile {cookie_path}', data, flags=re.M)
+		if new != data:
+			data = new
+			changed = True
+	else:
+		data = data.rstrip() + f"CookieAuthFile {cookie_path}\n"
 		changed = True
 
 	if changed:
@@ -393,75 +443,11 @@ def ensure_cookie_auth_in_torrc():
 			with open(TORRC_PATH, 'w') as f:
 				f.write(data)
 			success(f"Updated {TORRC_PATH} to enable CookieAuthentication (backup: {backup}).")
-			return True
 		except Exception as e:
 			warn(f"Failed to update {TORRC_PATH}: {e}")
-			return False
-	return True
+			return None
 
-def get_cookie_candidates():
-	"""
-	Return an ordered list of paths to check for Tor control auth cookie.
-	Looks for an explicit CookieAuthFile in torrc first, then common runtime paths.
-	"""
-	candidates = []
-	# If torrc contains CookieAuthFile, prefer that
-	try:
-		with open(TORRC_PATH, 'r') as f:
-			for line in f:
-				m = re.match(r'^\s*CookieAuthFile\s+(.+)$', line)
-				if m:
-					path = m.group(1).strip()
-					# strip quotes if any
-					path = path.strip('"').strip("'")
-					candidates.append(path)
-					break
-	except Exception:
-		# ignore read errors; fall back to standard locations
-		pass
-
-	# Common locations (ensure no duplicates)
-	common = [
-		'/run/tor/control.authcookie',
-		'/var/run/tor/control.authcookie',
-		'/var/lib/tor/control_auth_cookie',
-		'/var/lib/tor/control.authcookie',
-		'/run/tor/control_auth_cookie'
-	]
-	for p in common:
-		if p not in candidates:
-			candidates.append(p)
-	return candidates
-
-def wait_for_cookie(candidates=None, timeout=60):
-	"""
-	Wait for any auth cookie in `candidates` to appear (or use defaults).
-	Returns the path found or None on timeout. Ensures restrictive perms when possible.
-	"""
-	if candidates is None:
-		candidates = get_cookie_candidates()
-	deadline = time.time() + timeout
-	while time.time() < deadline:
-		for path in candidates:
-			try:
-				if os.path.exists(path):
-					# Attempt to set safe perms; ignore errors
-					try:
-						os.chown(path, 0, 0)
-					except Exception:
-						pass
-					try:
-						os.chmod(path, 0o600)
-					except Exception:
-						pass
-					info(f"Found Tor control auth cookie: {path}")
-					return path
-			except Exception:
-				# ignore and continue checking other candidates
-				pass
-		time.sleep(1)
-	warn(f"Timeout waiting for Tor control auth cookie. Checked: {', '.join(candidates)}")
-	return None
+	return cookie_path
 
 # --- Core operational functions ----------------------------------------------
 def start_torghost():
@@ -495,10 +481,32 @@ def start_torghost():
             success("Tor configuration appended to /etc/tor/torrc.")
         else:
             info("Tor configuration marker already present; skipping append.")
-    # ensure cookie auth lines are present (idempotent)
-        ensure_cookie_auth_in_torrc()
-    except IOError as e:
-        error(f"Error modifying torrc: {e}", fatal=True)
+    # ensure cookie auth lines are present (idempotent) and get chosen cookie path
+		cookie_path = ensure_cookie_auth_in_torrc()
+		if not cookie_path:
+			error("Failed to ensure CookieAuthentication in torrc; aborting.", fatal=True)
+	except IOError as e:
+		error(f"Error modifying torrc: {e}", fatal=True)
+
+	# Prepare the cookie parent dir (best-effort) so Tor can write the cookie
+	create_cookie_parent_dir(cookie_path)
+
+	# Stop systemd-resolved early so Tor can bind DNS ports reliably (record action)
+	try:
+		resolved_active = subprocess.run(['systemctl', 'is-active', 'systemd-resolved'],
+										 capture_output=True, text=True).stdout.strip() == 'active'
+		if resolved_active:
+			info("systemd-resolved is active — stopping it so Tor can bind DNSPort...")
+			subprocess.run(['systemctl', 'stop', 'systemd-resolved'], check=False)
+			try:
+				# record that we stopped it so stop_torghost can restart it
+				with open(RESOLVED_STOP_MARKER, 'w') as f:
+					f.write('stopped\n')
+			except Exception:
+				# marker write failure is non-fatal
+				pass
+	except Exception as e:
+		warn(f"Could not check/stop systemd-resolved: {e}")
 
     # --- Start Tor service and wait for it to be ready --------------------
     info("Starting tor service (systemctl start tor)...")
