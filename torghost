@@ -201,6 +201,11 @@ ControlPort 9051
         error(f"Error modifying torrc: {e}", fatal=True)
 
     # --- DNS configuration / backup ----------------------------------------
+    # Define resolv paths used for backup/restore and replacement.
+    resolv = '/etc/resolv.conf'
+    resolv_backup = '/etc/resolv.conf.bak-torghost'
+    resolv_backup_link = '/etc/resolv.conf.bak-torghost-link'
+
     info("Preparing DNS configuration (resolv.conf)...")
     try:
         if os.path.islink(resolv):
@@ -384,6 +389,11 @@ ip6tables -X
         warn(f"Failed to clean torrc: {e}")
 
     # --- Restore network resolver ----------------------------------------
+    # Define resolv paths used for backup/restore and restoration steps.
+    resolv = '/etc/resolv.conf'
+    resolv_backup = '/etc/resolv.conf.bak-torghost'
+    resolv_backup_link = '/etc/resolv.conf.bak-torghost-link'
+
     info("Restoring original /etc/resolv.conf (or symlink) if backup exists...")
     if os.path.exists(resolv_backup_link):
         try:
