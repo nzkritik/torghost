@@ -392,7 +392,7 @@ iptables -A OUTPUT -j REJECT
         error("Failed to apply IPv4 iptables rules.", fatal=True)
 
     # IPv6 handling disabled for troubleshooting.
-    #info("IPv6 ip6tables application is currently disabled for troubleshooting.")
+    #info("IPv6 ip6tables application is currently disabled for troubleshooting")
 
     # Small delay to allow Tor circuits to bootstrap and for NAT to stabilize
     #info("Waiting a few seconds for Tor to bootstrap circuits...")
@@ -457,6 +457,10 @@ iptables -X
         warn("Failed to stop Tor service; it may already be stopped or not installed.")
 
     # --- Clean up torrc ---------------------------------------------------
+    # Ensure torrc path/marker are defined (use module constants)
+    torrc_path = TORRC_PATH
+    torrc_marker = TORRC_MARKER
+
     info("Cleaning up tor configuration in /etc/tor/torrc...")
     try:
         with open(torrc_path, 'r') as f:
@@ -538,6 +542,11 @@ def show_status():
     print(f"Tor Status: {tor_status}")
     print(f"Current IP: {ip}")
 
+
+# --- Constants -------------------------------------------------------------
+# Centralize tor configuration path and marker so all functions can reference them
+TORRC_PATH = '/etc/tor/torrc'
+TORRC_MARKER = '## TorGhost Configuration'
 
 # --- Main execution flow ----------------------------------------------------
 # Install a SIGINT handler to allow graceful exit with Ctrl-C.
