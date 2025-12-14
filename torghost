@@ -535,6 +535,58 @@ def detect_nat_conflicts():
         warn(f"Could not inspect existing nat OUTPUT rules: {e}")
         return True
 
+# Add missing PREROUTING/ADDRTYPE -> DOCKER detector used by diagnostics/start checks
+def detect_prerouting_addrtype_docker():
+	"""
+	Detect nat PREROUTING rules that match ADDRTYPE LOCAL and/or jump to DOCKER.
+	Print offending lines (if any) and return True if such a rule exists.
+	"""
+	try:
+		res = subprocess.run(
+			['bash', '-c', "iptables -t nat -S | grep -E \"-A PREROUTING .*ADDRTYPE|PREROUTING .*DOCKER\" || true"],
+			capture_output=True, text=True
+		)
+		out = (res.stdout or '').strip()
+		if out:
+			warn("Detected nat PREROUTING rule(s) that match ADDRTYPE LOCAL / jump to DOCKER:")
+			for line in out.splitlines():
+				print("  " + line.strip())
+			return True
+		return False
+	except Exception as e:
+		warn(f"Could not inspect nat PREROUTING rules: {e}")
+		# be conservative to avoid proceeding when we cannot verify
+		return True
+
+# Provide actionable mitigation hints printed during diagnostics
+def suggest_immediate_mitigations():
+	"""
+	Print concise, one-line mitigations to stop NAT loops (operator-run).
+	"""
+	print("\nImmediate mitigations (run as root) — apply only if you understand the effects:\n")
+	print("1) Stop systemd-resolved (so /etc/resolv.conf can be managed):")
+	print("   sudo systemctl stop systemd-resolved")
+	print("")
+	print("2) Temporarily exempt critical owners/ports from nat OUTPUT redirection:")
+	print("   sudo iptables -t nat -I OUTPUT 1 -m owner --uid-owner 0 -j RETURN")
+	print("   sudo iptables -t nat -I OUTPUT 1 -m owner --uid-owner $(id -u tor) -j RETURN")
+	print("   sudo iptables -t nat -I OUTPUT 1 -p tcp --dport 9050 -j RETURN")
+	print("   sudo iptables -t nat -I OUTPUT 1 -p tcp --dport 9051 -j RETURN")
+	print("   sudo iptables -t nat -I OUTPUT 1 -p tcp --dport 9040 -j RETURN")
+	print("   sudo iptables -t nat -I OUTPUT 1 -p tcp --dport 53 -j RETURN")
+	print("")
+	print("3) If Docker inserted a broad PREROUTING ADDRTYPE -> DOCKER rule, remove or restrict it:")
+	print("   # remove (Docker may re-add on container start):")
+	print("   sudo iptables -t nat -D PREROUTING -m addrtype --dst-type LOCAL -j DOCKER")
+	print("   # or replace with a restricted rule that doesn't match 127.0.0.0/8:")
+	print("   sudo iptables -t nat -I PREROUTING 1 ! -d 127.0.0.0/8 -m addrtype --dst-type LOCAL -j DOCKER")
+	print("")
+	print("4) After mitigations: restart Tor and follow logs:")
+	print("   sudo systemctl restart tor")
+	print("   sudo journalctl -u tor -f")
+	print("")
+	print("If these stop the 'Possible loop' errors, make the exemptions persistent in your torghost rules and ensure Docker won't reinsert the broad PREROUTING rule.\n")
+
 def stop_and_wait(service, timeout=10):
     """
     Stop a systemd service and wait until it is not 'active'.
@@ -1344,6 +1396,16 @@ def diagnose_dns():
             print(rf.read().strip())
     except Exception as e:
         print(f"Could not read /etc/resolv.conf: {e}")
+
+    # After collecting diagnostic outputs, check for the PREROUTING/DOCKER pattern and suggest fixes.
+    try:
+        if detect_prerouting_addrtype_docker():
+            print("\n>>> ACTIONABLE: A nat PREROUTING ADDRTYPE/DOCKER rule was detected. This commonly causes the 'Possible loop' Tor error.")
+            suggest_immediate_mitigations()
+        else:
+            print("\n>>> No PREROUTING ADDRTYPE/DOCKER rules detected by quick scan.")
+    except Exception as e:
+        warn(f"Could not run PREROUTING/DOCKER detection: {e}")
 
     print("\n--- End of diagnostic dump ---")
     info("Diagnostic dump complete. Review outputs above for missing listeners, tor logs, or permission errors.")
