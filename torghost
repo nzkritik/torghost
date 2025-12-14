@@ -399,28 +399,69 @@ def ensure_cookie_auth_in_torrc():
 			return False
 	return True
 
-def wait_for_cookie(cookie_path='/run/tor/control.authcookie', timeout=30):
+def get_cookie_candidates():
 	"""
-	Wait for Tor control auth cookie to exist and ensure restrictive perms.
-	Returns True if cookie is available within timeout, False otherwise.
+	Return an ordered list of paths to check for Tor control auth cookie.
+	Looks for an explicit CookieAuthFile in torrc first, then common runtime paths.
 	"""
+	candidates = []
+	# If torrc contains CookieAuthFile, prefer that
+	try:
+		with open(TORRC_PATH, 'r') as f:
+			for line in f:
+				m = re.match(r'^\s*CookieAuthFile\s+(.+)$', line)
+				if m:
+					path = m.group(1).strip()
+					# strip quotes if any
+					path = path.strip('"').strip("'")
+					candidates.append(path)
+					break
+	except Exception:
+		# ignore read errors; fall back to standard locations
+		pass
+
+	# Common locations (ensure no duplicates)
+	common = [
+		'/run/tor/control.authcookie',
+		'/var/run/tor/control.authcookie',
+		'/var/lib/tor/control_auth_cookie',
+		'/var/lib/tor/control.authcookie',
+		'/run/tor/control_auth_cookie'
+	]
+	for p in common:
+		if p not in candidates:
+			candidates.append(p)
+	return candidates
+
+def wait_for_cookie(candidates=None, timeout=60):
+	"""
+	Wait for any auth cookie in `candidates` to appear (or use defaults).
+	Returns the path found or None on timeout. Ensures restrictive perms when possible.
+	"""
+	if candidates is None:
+		candidates = get_cookie_candidates()
 	deadline = time.time() + timeout
 	while time.time() < deadline:
-		if os.path.exists(cookie_path):
+		for path in candidates:
 			try:
-				os.chown(cookie_path, 0, 0)
+				if os.path.exists(path):
+					# Attempt to set safe perms; ignore errors
+					try:
+						os.chown(path, 0, 0)
+					except Exception:
+						pass
+					try:
+						os.chmod(path, 0o600)
+					except Exception:
+						pass
+					info(f"Found Tor control auth cookie: {path}")
+					return path
 			except Exception:
-				# ignore if chown fails; running as root is expected
+				# ignore and continue checking other candidates
 				pass
-			try:
-				os.chmod(cookie_path, 0o600)
-			except Exception:
-				pass
-			info(f"Found Tor control auth cookie: {cookie_path}")
-			return True
 		time.sleep(1)
-	warn(f"Timeout waiting for Tor control auth cookie at {cookie_path}")
-	return False
+	warn(f"Timeout waiting for Tor control auth cookie. Checked: {', '.join(candidates)}")
+	return None
 
 # --- Core operational functions ----------------------------------------------
 def start_torghost():
@@ -474,10 +515,18 @@ def start_torghost():
         error("Tor control port 9051 did not become available in time. Aborting.", fatal=True)
     success("Tor control port is reachable.")
 
-    # Wait for cookie to exist before attempting to authenticate / bootstrap
-    if not wait_for_cookie('/run/tor/control.authcookie', timeout=30):
-        warn("Auth cookie not found; authentication to the control port may fail. Check tor logs.")
-    # proceed to bootstrap check (authenticate will now succeed if cookie present)
+    # Wait for cookie to exist before attempting to authenticate / bootstrap.
+    # Use multiple candidate paths and a longer timeout to accommodate slow boots.
+    cookie_path = wait_for_cookie(get_cookie_candidates(), timeout=60)
+    if not cookie_path:
+        error(
+            "Tor control auth cookie not found after waiting. Aborting start to avoid breaking system DNS.\n"
+            "Ensure CookieAuthentication 1 is enabled in /etc/tor/torrc and that Tor can create the cookie\n"
+            "(or configure HashedControlPassword and update the script to authenticate using a password).",
+            fatal=True
+        )
+
+    # proceed to bootstrap check (authenticate will now succeed using the cookie)
     if not wait_for_bootstrap(timeout=120):
         error("Tor did not finish bootstrapping. Aborting to avoid leaving the system without working DNS/routes.", fatal=True)
 
