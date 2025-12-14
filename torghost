@@ -1068,6 +1068,12 @@ def stop_torghost(monitor=False, interval=10):
     except Exception as e:
         warn(f"IPv6 restore step failed: {e}")
 
+    # --- Restore Docker if torghost stopped it earlier --------------------
+    try:
+        restore_docker_if_stopped()
+    except Exception as e:
+        warn(f"Failed to restore Docker automatically: {e}")
+
     # --- Final status messages --------------------------------------------
     success(f"TorGhost stopped. Current IP: {get_ip()}")
 
