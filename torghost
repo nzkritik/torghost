@@ -24,6 +24,7 @@ import time
 import signal
 import shutil
 import socket  # added for port checks
+import threading  # new: used for check-leak monitor
 
 # --- Third-party dependency check -------------------------------------------
 # 'stem' is required to control the Tor process via its control port and to
@@ -583,6 +584,15 @@ iptables -X
     else:
         warn("No resolv.conf backup found. DNS may need manual restoration.")
 
+    # --- Remove IPv6 blocking rules and restore default IPv6 policies
+    info("Removing IPv6 blocking rules and restoring policies...")
+    try:
+        subprocess.run(['bash', '-c', 'ip6tables -F || true'], check=False)
+        subprocess.run(['bash', '-c', 'ip6tables -P OUTPUT ACCEPT || true'], check=False)
+        success("IPv6 ip6tables rules cleared and OUTPUT policy set to ACCEPT.")
+    except Exception as e:
+        warn(f"Failed to clear ip6tables rules: {e}")
+
     # --- Restore IPv6 sysctl settings (if changed) ------------------------
     try:
         restore_ipv6()
@@ -619,67 +629,167 @@ def show_status():
 
 
 def tighten_dns_rules(tor_uid):
-    """
-    Add extra filter rules to prevent any non-tor user from sending DNS (UDP/TCP 53)
-    directly to the network. These are defense-in-depth: the nat redirect should
-    catch DNS, but this prevents escapes (and helps detect misbehavior).
-    """
-    info("Installing additional DNS hardening rules (filter table)...")
-    try:
-        # UDP 53: reject packets from processes not running as tor
-        subprocess.run(['bash', '-c',
-            f'iptables -C OUTPUT -p udp --dport 53 -m owner ! --uid-owner {tor_uid} -j REJECT >/dev/null 2>&1 || '
-            f'iptables -I OUTPUT 1 -p udp --dport 53 -m owner ! --uid-owner {tor_uid} -j REJECT'
-        ], check=False)
-        # TCP 53: same for TCP DNS
-        subprocess.run(['bash', '-c',
-            f'iptables -C OUTPUT -p tcp --dport 53 -m owner ! --uid-owner {tor_uid} -j REJECT >/dev/null 2>&1 || '
-            f'iptables -I OUTPUT 1 -p tcp --dport 53 -m owner ! --uid-owner {tor_uid} -j REJECT'
-        ], check=False)
-        success("DNS hardening rules installed.")
-    except Exception as e:
-        warn(f"Failed to install DNS hardening rules: {e}")
+	"""
+	Add extra filter rules to prevent any non-tor user from sending DNS (UDP/TCP 53)
+	directly to the network. These are defense-in-depth: the nat redirect should
+	catch DNS, but this prevents escapes (and helps detect misbehavior).
+	"""
+	info("Installing additional DNS hardening rules (filter table)...")
+	try:
+		# UDP 53: reject packets from processes not running as tor (IPv4)
+		subprocess.run(['bash', '-c',
+			f'iptables -C OUTPUT -p udp --dport 53 -m owner ! --uid-owner {tor_uid} -j REJECT >/dev/null 2>&1 || '
+			f'iptables -I OUTPUT 1 -p udp --dport 53 -m owner ! --uid-owner {tor_uid} -j REJECT'
+		], check=False)
+		# TCP 53: same for TCP DNS (IPv4)
+		subprocess.run(['bash', '-c',
+			f'iptables -C OUTPUT -p tcp --dport 53 -m owner ! --uid-owner {tor_uid} -j REJECT >/dev/null 2>&1 || '
+			f'iptables -I OUTPUT 1 -p tcp --dport 53 -m owner ! --uid-owner {tor_uid} -j REJECT'
+		], check=False)
+
+		# IPv6 DNS hardening: reject non-tor user IPv6 DNS (UDP & TCP 53)
+		subprocess.run(['bash', '-c',
+			f'ip6tables -C OUTPUT -p udp --dport 53 -m owner ! --uid-owner {tor_uid} -j REJECT >/dev/null 2>&1 || '
+			f'ip6tables -I OUTPUT 1 -p udp --dport 53 -m owner ! --uid-owner {tor_uid} -j REJECT'
+		], check=False)
+		subprocess.run(['bash', '-c',
+			f'ip6tables -C OUTPUT -p tcp --dport 53 -m owner ! --uid-owner {tor_uid} -j REJECT >/dev/null 2>&1 || '
+			f'ip6tables -I OUTPUT 1 -p tcp --dport 53 -m owner ! --uid-owner {tor_uid} -j REJECT'
+		], check=False)
+
+		success("DNS hardening rules installed (IPv4 & IPv6).")
+	except Exception as e:
+		warn(f"Failed to install DNS hardening rules: {e}")
+
+# New: apply strict IPv6 block (allow loopback/local/tor user only)
+def apply_ipv6_block(tor_uid):
+	"""
+	Install ip6tables rules to block all outbound IPv6 traffic except:
+	- loopback (::1)
+	- link-local fe80::/10
+	- unique-local fc00::/7
+	- multicast ff00::/8
+	- traffic from the tor user (avoid loops)
+	"""
+	info("Applying strict IPv6 outbound block (ip6tables)...")
+	try:
+		# flush and set default DROP for OUTPUT, but allow critical exceptions
+		commands = [
+			"ip6tables -F",
+			"ip6tables -t raw -F || true",
+			"ip6tables -P OUTPUT DROP",
+			"ip6tables -A OUTPUT -o lo -j ACCEPT",
+			f"ip6tables -A OUTPUT -m owner --uid-owner {tor_uid} -j ACCEPT",
+			"ip6tables -A OUTPUT -d ::1/128 -j ACCEPT",
+			"ip6tables -A OUTPUT -d fe80::/10 -j ACCEPT",
+			"ip6tables -A OUTPUT -d fc00::/7 -j ACCEPT",
+			"ip6tables -A OUTPUT -d ff00::/8 -j ACCEPT",
+			# allow neighbor discovery to link-local if needed
+			"ip6tables -A OUTPUT -p icmpv6 -j ACCEPT"
+		]
+		for cmd in commands:
+			subprocess.run(['bash', '-c', cmd], check=False, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+		success("IPv6 blocking rules applied.")
+	except Exception as e:
+		warn(f"Failed to apply IPv6 block rules: {e}")
 
 
 def dns_leak_check(duration=6):
-    """
-    Quick DNS leak detection:
-    - If tcpdump is available, run it for `duration` seconds and look for
-      any UDP/53 packets not to/from 127.0.0.1.
-    - If tcpdump is not available, examine iptables nat OUTPUT counters as a hint.
-    Returns True if a leak was observed, False otherwise.
-    """
-    info("Starting DNS leak check...")
-    tcpdump_path = shutil.which('tcpdump')
-    if tcpdump_path:
-        info(f"Using tcpdump to monitor DNS on all interfaces for {duration} seconds...")
-        # Capture a single non-local DNS packet (timeout ensures we don't hang)
-        try:
-            cmd = ['timeout', str(duration), 'tcpdump', '-n', '-i', 'any', 'udp', 'port', '53', 'and', 'not', 'host', '127.0.0.1', '-c', '1']
-            proc = subprocess.run(cmd, capture_output=True, text=True)
-            out = proc.stdout.strip() + proc.stderr.strip()
-            if proc.returncode == 0 and out:
-                # tcpdump printed something -> leak observed
-                warn("DNS leak detected: observed UDP/53 traffic to non-local addresses:")
-                print(out)
-                return True
-            else:
-                success("No non-local UDP/53 packets observed during capture window.")
-                return False
-        except Exception as e:
-            warn(f"tcpdump monitoring failed: {e}")
-            return False
-    else:
-        info("tcpdump not found. Checking iptables nat OUTPUT counters as a heuristic...")
-        try:
-            # Show nat OUTPUT chain byte/packet counters for rules (nat may show redirects)
-            nat = subprocess.run(['bash', '-c', 'iptables -t nat -L OUTPUT -v -n'], capture_output=True, text=True)
-            print(nat.stdout)
-            info("If nat OUTPUT shows zero hits for the DNS redirect rule, DNS may not be redirected.")
-            return False
-        except Exception as e:
-            warn(f"Failed to inspect iptables: {e}")
-            return False
+	"""
+	Quick DNS leak detection:
+	- If tcpdump is available, run it for `duration` seconds and look for
+	  any UDP/53 packets not to/from 127.0.0.1 (IPv4) or ::1 (IPv6).
+	- If tcpdump is not available, examine iptables nat OUTPUT counters as a hint.
+	Returns True if a leak was observed, False otherwise.
+	"""
+	info("Starting DNS leak check...")
+	tcpdump_path = shutil.which('tcpdump')
+	if tcpdump_path:
+		info(f"Using tcpdump to monitor DNS on all interfaces for {duration} seconds...")
+		try:
+			# check IPv4 DNS leaks
+			cmd_v4 = ['timeout', str(duration), 'tcpdump', '-n', '-i', 'any', 'udp', 'port', '53', 'and', 'not', 'host', '127.0.0.1', '-c', '1']
+			proc_v4 = subprocess.run(cmd_v4, capture_output=True, text=True)
+			out_v4 = proc_v4.stdout.strip() + proc_v4.stderr.strip()
+			if proc_v4.returncode == 0 and out_v4:
+				warn("DNS leak detected (IPv4): observed UDP/53 traffic to non-local addresses:")
+				print(out_v4)
+				return True
+			# check IPv6 DNS leaks
+			cmd_v6 = ['timeout', str(duration), 'tcpdump', '-n', '-i', 'any', 'ip6', 'and', 'udp', 'port', '53', 'and', 'not', 'host', '::1', '-c', '1']
+			proc_v6 = subprocess.run(cmd_v6, capture_output=True, text=True)
+			out_v6 = proc_v6.stdout.strip() + proc_v6.stderr.strip()
+			if proc_v6.returncode == 0 and out_v6:
+				warn("DNS leak detected (IPv6): observed UDP/53 traffic to non-local IPv6 addresses:")
+				print(out_v6)
+				return True
+			success("No non-local DNS packets observed during capture windows.")
+			return False
+		except Exception as e:
+			warn(f"tcpdump monitoring failed: {e}")
+			return False
+	else:
+		info("tcpdump not found. Checking iptables nat OUTPUT counters as a heuristic...")
+		try:
+			nat = subprocess.run(['bash', '-c', 'iptables -t nat -L OUTPUT -v -n'], capture_output=True, text=True)
+			print(nat.stdout)
+			info("If nat OUTPUT shows zero hits for the DNS redirect rule, DNS may not be redirected.")
+			# also show ip6tables OUTPUT rules as heuristic
+			ip6 = subprocess.run(['bash', '-c', 'ip6tables -L OUTPUT -v -n'], capture_output=True, text=True)
+			print(ip6.stdout)
+			return False
+		except Exception as e:
+			warn(f"Failed to inspect iptables: {e}")
+			return False
+
+# New: continuous monitor mode for leak checking
+def monitor_leaks(interval=10):
+	"""
+	Continuously run dns_leak_check() every `interval` seconds.
+	User may type 'q' + Enter to quit, or press Ctrl-C.
+	"""
+	info(f"Entering continuous leak-monitor mode (interval {interval}s).")
+	info("Press 'q' then Enter to quit, or Ctrl-C to exit.")
+	stop_event = threading.Event()
+
+	def input_watcher():
+		# Blocking read on stdin in a thread; sets stop_event when 'q' received.
+		try:
+			while not stop_event.is_set():
+				line = sys.stdin.readline()
+				if not line:
+					# EOF or no input; small sleep to avoid busy loop
+					time.sleep(0.1)
+					continue
+				if line.strip().lower() == 'q':
+					stop_event.set()
+					break
+		except Exception:
+			stop_event.set()
+
+	watcher = threading.Thread(target=input_watcher, daemon=True)
+	watcher.start()
+
+	try:
+		while not stop_event.is_set():
+			leak = dns_leak_check(duration=6)
+			if leak:
+				warn("Leak detected during monitoring cycle.")
+			else:
+				success("No leak detected in this cycle.")
+			# wait interval seconds but exit early if stop_event set
+			for _ in range(int(interval)):
+				if stop_event.is_set():
+					break
+				time.sleep(1)
+	except KeyboardInterrupt:
+		info("Interrupted by user (Ctrl-C). Exiting monitor.")
+		stop_event.set()
+
+	# Ensure watcher thread will finish
+	stop_event.set()
+	watcher.join(timeout=1)
+	info("Leak monitor stopped. Returning to shell.")
 
 # --- Constants -------------------------------------------------------------
 # Centralize tor configuration path and marker so all functions can reference them
@@ -716,7 +826,14 @@ elif command == "switch":
 elif command == "status":
     show_status()
 elif command == "check-leak":
-    # Allow running leak check manually; requires sudo for tcpdump or iptables visibility
-    dns_leak_check()
+    # Continuous leak monitoring mode
+    # Optional: accept second CLI argument as interval in seconds
+    interval = 10
+    if len(sys.argv) >= 3:
+        try:
+            interval = int(sys.argv[2])
+        except Exception:
+            warn("Invalid interval; using default 10s.")
+    monitor_leaks(interval=interval)
 else:
     usage()
