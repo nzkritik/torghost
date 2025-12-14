@@ -951,6 +951,7 @@ def start_torghost():
     9. Verify connectivity
     """
     logo()
+    prepare_system_for_tor()
     info("Starting TorGhost - routing all traffic through Tor")
     
     # Setup logging
