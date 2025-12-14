@@ -282,6 +282,8 @@ def restore_ipv6():
 TORRC_PATH = '/etc/tor/torrc'
 TORRC_MARKER = '## TorGhost Configuration'
 IPV6_BACKUP_FILE = '/etc/tor/torghost-ipv6-backup'
+# Marker file to note we stopped systemd-resolved so we can restart it on stop
+RESOLVED_STOP_MARKER = '/run/torghost-stopped-systemd-resolved'
 
 # Use the module-level marker constant (do not reference a local variable that
 # does not exist at module import time).
@@ -405,6 +407,37 @@ def start_torghost():
     resolv = '/etc/resolv.conf'
     resolv_backup = '/etc/resolv.conf.bak-torghost'
     resolv_backup_link = '/etc/resolv.conf.bak-torghost-link'
+
+    # Before changing resolv.conf, ensure systemd-resolved won't intercept DNS.
+    # If systemd-resolved is active, stop it temporarily and record that action.
+    try:
+        resolved_active = subprocess.run(['systemctl', 'is-active', 'systemd-resolved'],
+                                         capture_output=True, text=True).stdout.strip() == 'active'
+        if resolved_active:
+            info("systemd-resolved is active — stopping it so Tor can bind DNSPort...")
+            subprocess.run(['systemctl', 'stop', 'systemd-resolved'], check=False)
+            try:
+                # record that we stopped it so stop_torghost can restart it
+                with open(RESOLVED_STOP_MARKER, 'w') as f:
+                    f.write('stopped\n')
+            except Exception:
+                # marker write failure is non-fatal
+                pass
+    except Exception as e:
+        warn(f"Could not check/stop systemd-resolved: {e}")
+
+    # Ensure Tor's DNSPort is listening before writing resolv.conf.
+    info("Waiting for Tor DNSPort (127.0.0.1:53) to be available (timeout 15s)...")
+    if not wait_for_port('127.0.0.1', 53, timeout=15):
+        warn("Tor DNSPort 53 not reachable. Attempting to restart tor and retry...")
+        try:
+            subprocess.run(['systemctl', 'restart', 'tor'], check=False)
+        except Exception:
+            pass
+        # retry wait
+        if not wait_for_port('127.0.0.1', 53, timeout=15):
+            # Abort to avoid replacing resolv.conf with a non-working resolver
+            error("Tor DNSPort not listening after restart — aborting start to avoid breaking DNS.", fatal=True)
 
     info("Preparing DNS configuration (resolv.conf) — backing up and pointing to Tor DNSPort...")
     try:
