@@ -16,12 +16,14 @@ section and the reasoning behind key operations.
 # time: used for timestamps in logging
 # signal: capture Ctrl-C / SIGINT to perform a clean shutdown
 # shutil: file operations such as copying and moving files (resolv.conf backup)
+# socket: used to check if Tor ports are open
 import os
 import sys
 import subprocess
 import time
 import signal
 import shutil
+import socket  # added for port checks
 
 # --- Third-party dependency check -------------------------------------------
 # 'stem' is required to control the Tor process via its control port and to
@@ -158,6 +160,22 @@ def get_ip():
         return "Unknown"
 
 
+# New helper: wait for a TCP port to be reachable on host
+def wait_for_port(host, port, timeout=60, interval=1):
+    """
+    Wait until a TCP port is accepting connections.
+    Returns True if the port is reachable within timeout, False otherwise.
+    """
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        try:
+            with socket.create_connection((host, port), timeout=2):
+                return True
+        except Exception:
+            time.sleep(interval)
+    return False
+
+
 # --- Core operational functions ----------------------------------------------
 def start_torghost():
     """
@@ -200,13 +218,35 @@ ControlPort 9051
     except IOError as e:
         error(f"Error modifying torrc: {e}", fatal=True)
 
-    # --- DNS configuration / backup ----------------------------------------
+    # --- Start Tor service and wait for it to be ready --------------------
+    info("Starting tor service (systemctl start tor)...")
+    try:
+        subprocess.run(['systemctl', 'start', 'tor'], check=True,
+                       stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        success("Tor service start requested.")
+    except subprocess.CalledProcessError:
+        error("Failed to start Tor service.", fatal=True)
+
+    # Wait for Tor control port to be available
+    info("Waiting for Tor control port (127.0.0.1:9051) to become available (timeout 60s)...")
+    if not wait_for_port('127.0.0.1', 9051, timeout=60):
+        error("Tor control port 9051 did not become available in time. Aborting.", fatal=True)
+    success("Tor control port is reachable.")
+
+    # Wait for TransPort (9040) to be listening (required for transparent proxying)
+    info("Waiting for Tor TransPort (127.0.0.1:9040) to become available (timeout 30s)...")
+    if not wait_for_port('127.0.0.1', 9040, timeout=30):
+        warn("Tor TransPort 9040 did not appear to be listening yet. Transparent proxying may fail.")
+    else:
+        success("Tor TransPort is reachable.")
+
+    # --- DNS configuration / backup (moved until Tor is up) ----------------
     # Define resolv paths used for backup/restore and replacement.
     resolv = '/etc/resolv.conf'
     resolv_backup = '/etc/resolv.conf.bak-torghost'
     resolv_backup_link = '/etc/resolv.conf.bak-torghost-link'
 
-    info("Preparing DNS configuration (resolv.conf)...")
+    info("Preparing DNS configuration (resolv.conf) — backing up and pointing to Tor DNSPort...")
     try:
         if os.path.islink(resolv):
             orig_target = os.readlink(resolv)
@@ -221,20 +261,12 @@ ControlPort 9051
             else:
                 info("Existing resolv.conf backup found; will not overwrite.")
 
+        # Write a plain resolv.conf pointing to the local Tor DNSPort
         with open(resolv, 'w') as f:
             f.write("nameserver 127.0.0.1\n")
         success("Wrote /etc/resolv.conf -> nameserver 127.0.0.1")
     except IOError as e:
         error(f"Error configuring DNS: {e}", fatal=True)
-
-    # --- Start Tor service -------------------------------------------------
-    info("Starting tor service (systemctl start tor)...")
-    try:
-        subprocess.run(['systemctl', 'start', 'tor'], check=True,
-                       stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-        success("Tor service started.")
-    except subprocess.CalledProcessError:
-        error("Failed to start Tor service.", fatal=True)
 
     # --- Determine Tor user's UID -----------------------------------------
     info("Determining 'tor' user UID for firewall exemptions...")
@@ -308,6 +340,10 @@ ip6tables -A OUTPUT -j REJECT
         success("IPv6 ip6tables rules applied.")
     except subprocess.CalledProcessError:
         warn("Failed to apply IPv6 iptables rules. IPv6 traffic may not be routed through Tor.")
+
+    # Small delay to allow Tor circuits to bootstrap and for NAT to stabilize
+    info("Waiting a few seconds for Tor to bootstrap circuits...")
+    time.sleep(5)
 
     # --- Final status messages --------------------------------------------
     success(f"TorGhost started. Current IP: {get_ip()}")
@@ -454,6 +490,7 @@ signal.signal(signal.SIGINT, sigint_handler)
 # Basic CLI parsing. Require a single subcommand.
 if len(sys.argv) < 2:
     usage()
+    show_status()
 
 command = sys.argv[1].lower()
 
