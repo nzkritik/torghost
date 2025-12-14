@@ -388,6 +388,159 @@ def detect_nat_conflicts():
 		warn(f"Could not inspect existing nat OUTPUT rules: {e}")
 		return True
 
+# --- Cookie helper functions ------------------------------------------------
+def choose_cookie_path():
+	"""
+	Choose a sensible control cookie path for this system.
+	Prefer /run/tor if that runtime directory exists, otherwise fall back
+	to the persistent DataDirectory location under /var/lib/tor.
+	"""
+	if os.path.isdir('/run/tor'):
+		return '/run/tor/control.authcookie'
+	if os.path.isdir('/var/lib/tor'):
+		return '/var/lib/tor/control_auth_cookie'
+	# Fallback (best-effort)
+	return '/run/tor/control.authcookie'
+
+def create_cookie_parent_dir(cookie_path):
+	"""
+	Ensure the parent directory of cookie_path exists with safe perms.
+	Attempts to chown the directory to the 'tor' user if present.
+	Non-fatal: logs warnings on failure.
+	"""
+	parent = os.path.dirname(cookie_path)
+	try:
+		if not os.path.exists(parent):
+			info(f"Creating cookie parent dir {parent}")
+			os.makedirs(parent, exist_ok=True)
+			try:
+				# best-effort chown to tor:tor
+				uid = int(subprocess.run(['id', '-u', 'tor'], capture_output=True, text=True).stdout.strip())
+				gid = int(subprocess.run(['id', '-g', 'tor'], capture_output=True, text=True).stdout.strip())
+				os.chown(parent, uid, gid)
+			except Exception:
+				# ignore if 'tor' user not present or chown fails
+				pass
+			try:
+				os.chmod(parent, 0o700)
+			except Exception:
+				pass
+		else:
+			info(f"Cookie parent dir exists: {parent}")
+	except Exception as e:
+		warn(f"Failed to create/prepare cookie parent directory {parent}: {e}")
+
+def ensure_cookie_auth_in_torrc():
+	"""
+	Ensure torrc contains CookieAuthentication and a usable CookieAuthFile.
+	Removes any existing CookieAuthentication/CookieAuthFile lines (including
+	commented variants) then appends a clean block. Returns the chosen cookie
+	path on success or None on failure.
+	"""
+	try:
+		with open(TORRC_PATH, 'r') as f:
+			data = f.read()
+	except Exception as e:
+		warn(f"Could not read {TORRC_PATH}: {e}")
+		return None
+
+	cookie_path = choose_cookie_path()
+
+	# Strip any existing CookieAuthentication/CookieAuthFile lines (even commented)
+	lines = []
+	for line in data.splitlines():
+		if re.match(r'^\s*#?\s*CookieAuthentication\b', line):
+			continue
+		if re.match(r'^\s*#?\s*CookieAuthFile\b', line):
+			continue
+		lines.append(line)
+	clean = "\n".join(lines).rstrip() + "\n\n"
+
+	# Append a clear block
+	block = (
+		"# TorGhost: enable cookie auth\n"
+		"CookieAuthentication 1\n"
+		f"CookieAuthFile {cookie_path}\n"
+	)
+
+	new_data = clean + block
+
+	# If identical, return chosen path
+	if new_data == data:
+		return cookie_path
+
+	# Backup and write
+	try:
+		backup = TORRC_PATH + f'.bak-torghost-{int(time.time())}'
+		shutil.copy(TORRC_PATH, backup)
+		with open(TORRC_PATH, 'w') as f:
+			f.write(new_data)
+		success(f"Updated {TORRC_PATH} to enable CookieAuthentication (backup: {backup}).")
+		return cookie_path
+	except Exception as e:
+		warn(f"Failed to update {TORRC_PATH}: {e}")
+		return None
+
+def get_cookie_candidates():
+	"""
+	Return an ordered list of paths to check for Tor control auth cookie.
+	Prefer an explicit CookieAuthFile in torrc, then common runtime paths.
+	"""
+	candidates = []
+	# If torrc contains CookieAuthFile, prefer that
+	try:
+		with open(TORRC_PATH, 'r') as f:
+			for line in f:
+				m = re.match(r'^\s*CookieAuthFile\s+(.+)$', line)
+				if m:
+					path = m.group(1).strip().strip('"').strip("'")
+					candidates.append(path)
+					break
+	except Exception:
+		pass
+
+	# Common locations
+	common = [
+		'/run/tor/control.authcookie',
+		'/run/tor/control_auth_cookie',
+		'/var/run/tor/control.authcookie',
+		'/var/lib/tor/control_auth_cookie',
+		'/var/lib/tor/control.authcookie'
+	]
+	for p in common:
+		if p not in candidates:
+			candidates.append(p)
+	return candidates
+
+def wait_for_cookie(candidates=None, timeout=60):
+	"""
+	Wait for any auth cookie in `candidates` to appear.
+	Returns the path found or None on timeout. Ensures restrictive perms where possible.
+	"""
+	if candidates is None:
+		candidates = get_cookie_candidates()
+	deadline = time.time() + timeout
+	while time.time() < deadline:
+		for path in candidates:
+			try:
+				if os.path.exists(path):
+					# best-effort secure perms
+					try:
+						os.chown(path, 0, 0)
+					except Exception:
+						pass
+					try:
+						os.chmod(path, 0o600)
+					except Exception:
+						pass
+					info(f"Found Tor control auth cookie: {path}")
+					return path
+			except Exception:
+				pass
+		time.sleep(1)
+	warn(f"Timeout waiting for Tor control auth cookie. Checked: {', '.join(candidates)}")
+	return None
+
 # --- Core operational functions ----------------------------------------------
 def start_torghost():
     """
