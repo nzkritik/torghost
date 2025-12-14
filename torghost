@@ -282,6 +282,7 @@ TORRC_PATH = '/etc/tor/torrc'
 TORRC_MARKER = '## TorGhost Configuration'
 IPV6_BACKUP_FILE = '/etc/tor/torghost-ipv6-backup'
 RESOLVED_STOP_MARKER = '/run/torghost-stopped-systemd-resolved'
+DOCKER_STOP_MARKER = '/run/torghost-stopped-docker'   # <-- new: marker for docker stop
 
 # Use the module-level marker constant (do not reference a local variable that
 # does not exist at module import time).
@@ -294,6 +295,69 @@ TransPort 9040
 DNSPort 5353
 ControlPort 9051
 """
+
+def is_docker_active():
+    """
+    Return True if systemd reports the docker service is active.
+    Non-fatal: returns False on error.
+    """
+    try:
+        res = subprocess.run(['systemctl', 'is-active', 'docker'], capture_output=True, text=True)
+        return res.stdout.strip() == 'active'
+    except Exception:
+        return False
+
+def stop_docker_and_wait(timeout=10):
+    """
+    Stop the docker service and wait until it is inactive.
+    If docker was active and we stopped it, create DOCKER_STOP_MARKER so we can restore later.
+    This is best-effort and non-fatal; logs warnings on failure.
+    """
+    try:
+        if not shutil.which('systemctl'):
+            info("systemctl not available; cannot manage Docker here.")
+            return
+        if not is_docker_active():
+            info("Docker not active; skipping stop.")
+            return
+        info("Stopping Docker to avoid Docker/ADDRTYPE NAT interference...")
+        subprocess.run(['systemctl', 'stop', 'docker'], check=False)
+        deadline = time.time() + timeout
+        while time.time() < deadline:
+            if not is_docker_active():
+                try:
+                    with open(DOCKER_STOP_MARKER, 'w') as f:
+                        f.write('stopped\n')
+                except Exception:
+                    # non-fatal
+                    pass
+                success("Docker stopped (marker written).")
+                return
+            time.sleep(0.5)
+        warn("Timed out waiting for Docker to stop.")
+    except Exception as e:
+        warn(f"Failed to stop Docker: {e}")
+
+def restore_docker_if_stopped():
+    """
+    Start Docker if torghost previously stopped it (marker exists).
+    Removes the marker file after attempting to start.
+    """
+    try:
+        if not os.path.exists(DOCKER_STOP_MARKER):
+            return
+        if not shutil.which('systemctl'):
+            warn("systemctl not available; cannot restore Docker automatically.")
+            return
+        info("Restoring Docker service that was stopped by torghost...")
+        subprocess.run(['systemctl', 'start', 'docker'], check=False)
+        try:
+            os.remove(DOCKER_STOP_MARKER)
+        except Exception:
+            pass
+        success("Requested Docker start (verify with 'systemctl status docker').")
+    except Exception as e:
+        warn(f"Failed to restore Docker: {e}")
 
 def set_tor_dnsport(port):
     """
@@ -326,6 +390,10 @@ iptables -t nat -F
 
 # Print existing nat OUTPUT rules (diagnostic — preserved in the log)
 iptables -t nat -L OUTPUT -n --line-numbers
+
+# Prevent redirecting packets destined to local addresses (ADDRTYPE LOCAL)
+# (avoids redirecting traffic intended for localhost / local sockets into Tor)
+iptables -t nat -I OUTPUT 1 -m addrtype --dst-type LOCAL -j RETURN || true
 
 # Exempt root (uid 0) from NAT redirection (avoid redirecting critical system traffic)
 iptables -t nat -I OUTPUT -m owner --uid-owner 0 -j RETURN
@@ -631,6 +699,12 @@ def start_torghost():
     except Exception as e:
         warn(f"Could not check/stop systemd-resolved: {e}")
 
+    # NEW: stop Docker if present to avoid DOCKER PREROUTING/ADDRTYPE interference
+    try:
+        stop_docker_and_wait(timeout=8)
+    except Exception as e:
+        warn(f"Could not stop Docker (non-fatal): {e}")
+
     # --- Start Tor service and wait for it to be ready --------------------
     info("Starting tor service (systemctl start tor)...")
     try:
@@ -796,6 +870,13 @@ def start_torghost():
     # Safety check: abort if there are existing nat REDIRECT rules that may cause loops.
     if detect_nat_conflicts():
         error("Existing NAT/REDIRECT rules detected that may conflict with TorGhost. Aborting to avoid creating a TransPort/NAT loop. Inspect `iptables -t nat -L OUTPUT -n --line-numbers` and remove conflicting rules before retrying.", fatal=True)
+
+    # New check: detect PREROUTING ADDRTYPE/DOCKER entries that can still intercept local destinations.
+    if detect_prerouting_addrtype_docker():
+        error("Please remove or restrict the nat PREROUTING ADDRTYPE/DOCKER rule (it matches local destinations) before running torghost. Example remediation:\n"
+              "  sudo iptables -t nat -D PREROUTING -m addrtype --dst-type LOCAL -j DOCKER\n"
+              "or re-add restricted:\n"
+              "  sudo iptables -t nat -I PREROUTING 1 ! -d 127.0.0.0/8 -m addrtype --dst-type LOCAL -j DOCKER", fatal=True)
 
     try:
         subprocess.run(['bash', '-c', iptables_script], check=True,
