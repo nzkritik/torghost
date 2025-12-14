@@ -276,6 +276,12 @@ def restore_ipv6():
     except Exception as e:
         warn(f"Failed to restore IPv6 settings: {e}")
 
+# --- Constants -------------------------------------------------------------
+# Centralize tor configuration path and marker so templates can be evaluated
+TORRC_PATH = '/etc/tor/torrc'
+TORRC_MARKER = '## TorGhost Configuration'
+IPV6_BACKUP_FILE = '/etc/tor/torghost-ipv6-backup'
+
 # Use the module-level marker constant (do not reference a local variable that
 # does not exist at module import time).
 TORCONTENT = f"""
@@ -825,12 +831,6 @@ def monitor_leaks(interval=10):
 	stop_event.set()
 	watcher.join(timeout=1)
 	info("Leak monitor stopped. Returning to shell.")
-
-# --- Constants -------------------------------------------------------------
-# Centralize tor configuration path and marker so templates can be evaluated
-TORRC_PATH = '/etc/tor/torrc'
-TORRC_MARKER = '## TorGhost Configuration'
-IPV6_BACKUP_FILE = '/etc/tor/torghost-ipv6-backup'
 
 # --- Main execution flow ----------------------------------------------------
 # Install a SIGINT handler to allow graceful exit with Ctrl-C.
