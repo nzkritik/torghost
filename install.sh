@@ -7,6 +7,51 @@ if [ "$EUID" -ne 0 ]; then
 	exit $?
 fi
 
+# Pretty-print helpers (use gum when available, otherwise fall back to echo)
+gum_available() {
+	command -v gum >/dev/null 2>&1
+}
+
+pretty_title() {
+	if gum_available; then
+		gum style --foreground=212 --bold "$*"
+	else
+		echo "$*"
+	fi
+}
+
+pretty_info() {
+	if gum_available; then
+		gum style --foreground=green "$*"
+	else
+		echo "$*"
+	fi
+}
+
+pretty_success() {
+	if gum_available; then
+		gum style --foreground=teal "$*"
+	else
+		echo "$*"
+	fi
+}
+
+pretty_warn() {
+	if gum_available; then
+		gum style --foreground=yellow "$*"
+	else
+		echo "$*"
+	fi
+}
+
+pretty_error() {
+	if gum_available; then
+		gum style --foreground=red --bold "$*"
+	else
+		echo "$*"
+	fi
+}
+
 # Detect OS and ensure it's Arch or Arch-based
 if [ -f /etc/os-release ]; then
 	# shellcheck disable=SC1091
@@ -71,49 +116,3 @@ sudo chmod +x /usr/local/bin/torghost
 
 pretty_success "=====> Done"
 pretty_info "=====> Open terminal and type 'torghost' for usage"
-
-
-# Pretty-print helpers (use gum when available, otherwise fall back to echo)
-gum_available() {
-	command -v gum >/dev/null 2>&1
-}
-
-pretty_title() {
-	if gum_available; then
-		gum style --foreground=212 --bold "$*"
-	else
-		echo "$*"
-	fi
-}
-
-pretty_info() {
-	if gum_available; then
-		gum style --foreground=green "$*"
-	else
-		echo "$*"
-	fi
-}
-
-pretty_success() {
-	if gum_available; then
-		gum style --foreground=teal "$*"
-	else
-		echo "$*"
-	fi
-}
-
-pretty_warn() {
-	if gum_available; then
-		gum style --foreground=yellow "$*"
-	else
-		echo "$*"
-	fi
-}
-
-pretty_error() {
-	if gum_available; then
-		gum style --foreground=red --bold "$*"
-	else
-		echo "$*"
-	fi
-}
