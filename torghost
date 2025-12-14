@@ -311,7 +311,8 @@ def stop_docker_and_wait(timeout=10):
     """
     Stop the docker service and wait until it is inactive.
     If docker was active and we stopped it, create DOCKER_STOP_MARKER so we can restore later.
-    This is best-effort and non-fatal; logs warnings on failure.
+    Best-effort: after stopping Docker, back up nat table and remove PREROUTING ADDRTYPE->DOCKER rule
+    if present to avoid local NAT loops that affect Tor.
     """
     try:
         if not shutil.which('systemctl'):
@@ -332,6 +333,30 @@ def stop_docker_and_wait(timeout=10):
                     # non-fatal
                     pass
                 success("Docker stopped (marker written).")
+                # --- best-effort: remove PREROUTING ADDRTYPE -> DOCKER if present ---
+                try:
+                    # Check for offending PREROUTING rule
+                    p = subprocess.run(['bash', '-c', "iptables -t nat -S | grep -E \"-A PREROUTING .*ADDRTYPE|PREROUTING .*DOCKER\" || true"],
+                                       capture_output=True, text=True)
+                    if p.stdout.strip():
+                        ts = int(time.time())
+                        backup = f"/run/torghost-nat-backup-{ts}.rules"
+                        try:
+                            subprocess.run(['bash', '-c', f'iptables-save -t nat > {backup}'], check=False)
+                            info(f"Backed up nat table to {backup} before modifications.")
+                        except Exception:
+                            warn("Could not write nat backup; proceeding cautiously.")
+                        # Try to delete the specific PREROUTING ADDRTYPE -> DOCKER rule
+                        del_cmd = ['bash', '-c', 'iptables -t nat -D PREROUTING -m addrtype --dst-type LOCAL -j DOCKER']
+                        r = subprocess.run(del_cmd, capture_output=True, text=True)
+                        if r.returncode == 0:
+                            success("Removed PREROUTING ADDRTYPE -> DOCKER rule (best-effort).")
+                        else:
+                            # not fatal — inform operator
+                            warn("Could not remove PREROUTING ADDRTYPE->DOCKER rule automatically (it may have changed). Please remove it manually if present.")
+                except Exception as e:
+                    warn(f"Error while attempting to remove PREROUTING DOCKER rule: {e}")
+                # end best-effort cleanup
                 return
             time.sleep(0.5)
         warn("Timed out waiting for Docker to stop.")
@@ -815,6 +840,39 @@ def start_torghost():
         warn(f"Failed to verify systemd-resolved state: {e}")
         # Be conservative: abort to avoid clobbering resolv.conf
         error("Unable to verify systemd-resolved state; aborting to avoid breaking system DNS.", fatal=True)
+
+    # Additional sanity: ensure /etc/resolv.conf is NOT still the systemd stub or pointing at 127.0.0.53.
+    try:
+        resolv = '/etc/resolv.conf'
+        # If symlink to systemd stub or contains 127.0.0.53, refuse to overwrite and instruct user.
+        is_stub = False
+        if os.path.islink(resolv):
+            target = os.readlink(resolv)
+            if 'systemd' in target or 'resolved' in target or 'stub' in target:
+                is_stub = True
+        else:
+            try:
+                with open(resolv, 'r') as rf:
+                    txt = rf.read()
+                    if '127.0.0.53' in txt:
+                        is_stub = True
+            except Exception:
+                # ignore read failures here
+                pass
+        if is_stub:
+            error(
+                "/etc/resolv.conf appears to be the systemd-resolved stub (nameserver 127.0.0.53) or symlinked to the resolver.\n"
+                "TorGhost will not overwrite the system resolver while systemd-resolved is active. Please ensure systemd-resolved is stopped/disabled and /etc/resolv.conf is writable, then retry.\n"
+                "Example remediation:\n"
+                "  sudo systemctl stop systemd-resolved\n"
+                "  sudo systemctl disable --now systemd-resolved\n"
+                "  sudo rm /etc/resolv.conf  # if it's a symlink to the stub (be careful!)\n"
+                "Then re-run: sudo torghost start",
+                fatal=True
+            )
+    except Exception as e:
+        # non-fatal but inform
+        warn(f"Failed to sanity-check /etc/resolv.conf: {e}")
 
     info("Preparing DNS configuration (resolv.conf) — backing up and pointing to Tor DNSPort...")
     try:
