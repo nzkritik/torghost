@@ -13,25 +13,22 @@ Clone the repo or download the files, open the directory and follow the commands
 	./install.sh
 
 -----------------------------------------------------------------------------------------
+▄▄▄▄▄▄▄▄▄           ▄▄▄▄▄▄▄  ▄▄                      
+▀▀▀███▀▀▀          ███▀▀▀▀▀  ██                 ██   
+   ███ ▄███▄ ████▄ ███       ████▄ ▄███▄ ▄█▀▀▀ ▀██▀▀ 
+   ███ ██ ██ ██ ▀▀ ███  ███▀ ██ ██ ██ ██ ▀███▄  ██   
+   ███ ▀███▀ ██    ▀██████▀  ██ ██ ▀███▀ ▄▄▄█▀  ██   
+                                                            
+    v3.0 - rewritten by nzkritik for Arch Linux
+    
 
-        _____           ____ _               _
-       |_   _|__  _ __ / ___| |__   ___  ___| |_
-         | |/ _ \| '__| |  _| '_ \ / _ \/ __| __|
-         | | (_) | |  | |_| | | | | (_) \__ \ |_
-         |_|\___/|_|   \____|_| |_|\___/|___/\__|
-	v3.0 - Technical Dada | www.technicaldada.in
-        -=[ re-imagined for Arch Linux by nzkritik ]=-
 
-
-	USAGE:
-        torghost start    (start torghost)
-        torghost stop     (stop torghost)
-        torghost switch   (switch IP)
-        torghost status   (check status)
-        torghost ip       (show current IP)
-
+    USAGE:
+        sudo torghost start   (start torghost)
+        sudo torghost stop    (stop torghost) 
+        sudo torghost switch  (switch IP)
+        torghost status       (show status)
 -----------------------------------------------------------------------------------------
-
 
 ## REQUIREMENTS
 - Arch Linux based distro
@@ -59,3 +56,4 @@ This tool is developed for educational purposes only. The developer is not respo
 - Arch Linux Port: [nzkritik](https://github.com/nzkritik)  
 
 ---   
+~
