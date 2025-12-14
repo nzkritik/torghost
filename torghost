@@ -224,6 +224,7 @@ ControlPort 9051
         subprocess.run(['systemctl', 'start', 'tor'], check=True,
                        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         success("Tor service start requested.")
+        subprocess.run(['systemctl', 'status', 'tor'], check=True)
     except subprocess.CalledProcessError:
         error("Failed to start Tor service.", fatal=True)
 
@@ -308,21 +309,22 @@ iptables -A OUTPUT -j REJECT
     # --- Prepare ip6tables (IPv6) script ----------------------------------
     # Many systems may not have IPv6 configured; this script attempts to apply
     # IPv6 equivalents. Failure to apply is non-fatal but emits a warning.
-    ip6tables_script = f"""
-ip6tables -F
-ip6tables -t nat -F
-ip6tables -t nat -A OUTPUT -m owner --uid-owner {tor_uid} -j RETURN
-ip6tables -t nat -A OUTPUT -p udp --dport 53 -j REDIRECT --to-ports 53
-ip6tables -t nat -A OUTPUT -p tcp --dport 53 -j REDIRECT --to-ports 53
-ip6tables -t nat -A OUTPUT -d ::1/128 -j RETURN
-ip6tables -t nat -A OUTPUT -d fc00::/7 -j RETURN
-ip6tables -t nat -A OUTPUT -p tcp --syn -j REDIRECT --to-ports 9040
-ip6tables -A OUTPUT -m state --state ESTABLISHED,RELATED -j ACCEPT
-ip6tables -A OUTPUT -d ::1/128 -j ACCEPT
-ip6tables -A OUTPUT -d fc00::/7 -j ACCEPT
-ip6tables -A OUTPUT -m owner --uid-owner {tor_uid} -j ACCEPT
-ip6tables -A OUTPUT -j REJECT
-"""
+    # For troubleshooting IPv6 is currently disabled — comment out the script.
+    # ip6tables_script = f"""
+    # ip6tables -F
+    # ip6tables -t nat -F
+    # ip6tables -t nat -A OUTPUT -m owner --uid-owner {tor_uid} -j RETURN
+    # ip6tables -t nat -A OUTPUT -p udp --dport 53 -j REDIRECT --to-ports 53
+    # ip6tables -t nat -A OUTPUT -p tcp --dport 53 -j REDIRECT --to-ports 53
+    # ip6tables -t nat -A OUTPUT -d ::1/128 -j RETURN
+    # ip6tables -t nat -A OUTPUT -d fc00::/7 -j RETURN
+    # ip6tables -t nat -A OUTPUT -p tcp --syn -j REDIRECT --to-ports 9040
+    # ip6tables -A OUTPUT -m state --state ESTABLISHED,RELATED -j ACCEPT
+    # ip6tables -A OUTPUT -d ::1/128 -j ACCEPT
+    # ip6tables -A OUTPUT -d fc00::/7 -j ACCEPT
+    # ip6tables -A OUTPUT -m owner --uid-owner {tor_uid} -j ACCEPT
+    # ip6tables -A OUTPUT -j REJECT
+    # """
 
     # --- Apply iptables rules ---------------------------------------------
     info("Applying IPv4 iptables rules to route traffic through Tor...")
@@ -333,13 +335,8 @@ ip6tables -A OUTPUT -j REJECT
     except subprocess.CalledProcessError:
         error("Failed to apply IPv4 iptables rules.", fatal=True)
 
-    info("Applying IPv6 ip6tables rules (may be unsupported on some systems)...")
-    try:
-        subprocess.run(['bash', '-c', ip6tables_script], check=True,
-                       stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-        success("IPv6 ip6tables rules applied.")
-    except subprocess.CalledProcessError:
-        warn("Failed to apply IPv6 iptables rules. IPv6 traffic may not be routed through Tor.")
+    # IPv6 handling disabled for troubleshooting.
+    info("IPv6 ip6tables application is currently disabled for troubleshooting.")
 
     # Small delay to allow Tor circuits to bootstrap and for NAT to stabilize
     info("Waiting a few seconds for Tor to bootstrap circuits...")
@@ -347,7 +344,7 @@ ip6tables -A OUTPUT -j REJECT
 
     # --- Final status messages --------------------------------------------
     success(f"TorGhost started. Current IP: {get_ip()}")
-    info("Note: All DNS (IPv4 & IPv6) and TCP traffic routed through Tor.")
+    info("Note: All DNS (IPv4) and TCP traffic routed through Tor.")
     info("Run 'sudo torghost stop' to revert all changes.")
 
 def stop_torghost():
@@ -376,20 +373,23 @@ iptables -X
         warn("Failed to flush IPv4 iptables; manual intervention may be required.")
 
     # --- Flush IPv6 ip6tables --------------------------------------------
-    info("Flushing IPv6 ip6tables and restoring default ACCEPT policies...")
-    try:
-        subprocess.run(['bash', '-c', """
-ip6tables -P INPUT ACCEPT
-ip6tables -P FORWARD ACCEPT
-ip6tables -P OUTPUT ACCEPT
-ip6tables -t nat -F
-ip6tables -t mangle -F
-ip6tables -F
-ip6tables -X
-"""], check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-        success("IPv6 firewall flushed.")
-    except subprocess.CalledProcessError:
-        warn("Failed to flush IPv6 iptables; manual intervention may be required.")
+    # IPv6 flushing is disabled while troubleshooting to avoid interfering
+    # with current diagnostics. Uncomment the block below to re-enable.
+    # info("Flushing IPv6 ip6tables and restoring default ACCEPT policies...")
+    # try:
+    #     subprocess.run(['bash', '-c', """
+    # ip6tables -P INPUT ACCEPT
+    # ip6tables -P FORWARD ACCEPT
+    # ip6tables -P OUTPUT ACCEPT
+    # ip6tables -t nat -F
+    # ip6tables -t mangle -F
+    # ip6tables -F
+    # ip6tables -X
+    # """], check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    #     success("IPv6 firewall flushed.")
+    # except subprocess.CalledProcessError:
+    #     warn("Failed to flush IPv6 iptables; manual intervention may be required.")
+    info("IPv6 ip6tables flush is currently disabled for troubleshooting.")
 
     # --- Stop Tor service -------------------------------------------------
     info("Stopping Tor service (systemctl stop tor)...")
