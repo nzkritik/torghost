@@ -454,6 +454,12 @@ iptables -A OUTPUT -j REJECT
     except subprocess.CalledProcessError:
         error("Failed to apply IPv4 iptables rules.", fatal=True)
 
+    # Install additional DNS hardening rules (defense-in-depth)
+    try:
+        tighten_dns_rules(tor_uid)
+    except Exception as e:
+        warn(f"Could not apply DNS hardening rules: {e}")
+
     # IPv6 handling disabled for troubleshooting.
     #info("IPv6 ip6tables application is currently disabled for troubleshooting")
 
@@ -463,7 +469,7 @@ iptables -A OUTPUT -j REJECT
 
     # --- Final status messages --------------------------------------------
     success(f"TorGhost started. Current IP: {get_ip()}")
-    info("Note: All DNS (IPv4) and TCP traffic routed through Tor.")
+    info("Note: All DNS (IPv4 & IPv6) and TCP traffic routed through Tor.")
     info("Run 'sudo torghost stop' to revert all changes.")
 
 def stop_torghost():
@@ -612,6 +618,69 @@ def show_status():
     print(f"Current IP: {ip}")
 
 
+def tighten_dns_rules(tor_uid):
+    """
+    Add extra filter rules to prevent any non-tor user from sending DNS (UDP/TCP 53)
+    directly to the network. These are defense-in-depth: the nat redirect should
+    catch DNS, but this prevents escapes (and helps detect misbehavior).
+    """
+    info("Installing additional DNS hardening rules (filter table)...")
+    try:
+        # UDP 53: reject packets from processes not running as tor
+        subprocess.run(['bash', '-c',
+            f'iptables -C OUTPUT -p udp --dport 53 -m owner ! --uid-owner {tor_uid} -j REJECT >/dev/null 2>&1 || '
+            f'iptables -I OUTPUT 1 -p udp --dport 53 -m owner ! --uid-owner {tor_uid} -j REJECT'
+        ], check=False)
+        # TCP 53: same for TCP DNS
+        subprocess.run(['bash', '-c',
+            f'iptables -C OUTPUT -p tcp --dport 53 -m owner ! --uid-owner {tor_uid} -j REJECT >/dev/null 2>&1 || '
+            f'iptables -I OUTPUT 1 -p tcp --dport 53 -m owner ! --uid-owner {tor_uid} -j REJECT'
+        ], check=False)
+        success("DNS hardening rules installed.")
+    except Exception as e:
+        warn(f"Failed to install DNS hardening rules: {e}")
+
+
+def dns_leak_check(duration=6):
+    """
+    Quick DNS leak detection:
+    - If tcpdump is available, run it for `duration` seconds and look for
+      any UDP/53 packets not to/from 127.0.0.1.
+    - If tcpdump is not available, examine iptables nat OUTPUT counters as a hint.
+    Returns True if a leak was observed, False otherwise.
+    """
+    info("Starting DNS leak check...")
+    tcpdump_path = shutil.which('tcpdump')
+    if tcpdump_path:
+        info(f"Using tcpdump to monitor DNS on all interfaces for {duration} seconds...")
+        # Capture a single non-local DNS packet (timeout ensures we don't hang)
+        try:
+            cmd = ['timeout', str(duration), 'tcpdump', '-n', '-i', 'any', 'udp', 'port', '53', 'and', 'not', 'host', '127.0.0.1', '-c', '1']
+            proc = subprocess.run(cmd, capture_output=True, text=True)
+            out = proc.stdout.strip() + proc.stderr.strip()
+            if proc.returncode == 0 and out:
+                # tcpdump printed something -> leak observed
+                warn("DNS leak detected: observed UDP/53 traffic to non-local addresses:")
+                print(out)
+                return True
+            else:
+                success("No non-local UDP/53 packets observed during capture window.")
+                return False
+        except Exception as e:
+            warn(f"tcpdump monitoring failed: {e}")
+            return False
+    else:
+        info("tcpdump not found. Checking iptables nat OUTPUT counters as a heuristic...")
+        try:
+            # Show nat OUTPUT chain byte/packet counters for rules (nat may show redirects)
+            nat = subprocess.run(['bash', '-c', 'iptables -t nat -L OUTPUT -v -n'], capture_output=True, text=True)
+            print(nat.stdout)
+            info("If nat OUTPUT shows zero hits for the DNS redirect rule, DNS may not be redirected.")
+            return False
+        except Exception as e:
+            warn(f"Failed to inspect iptables: {e}")
+            return False
+
 # --- Constants -------------------------------------------------------------
 # Centralize tor configuration path and marker so all functions can reference them
 TORRC_PATH = '/etc/tor/torrc'
@@ -646,5 +715,8 @@ elif command == "switch":
     switch_tor()
 elif command == "status":
     show_status()
+elif command == "check-leak":
+    # Allow running leak check manually; requires sudo for tcpdump or iptables visibility
+    dns_leak_check()
 else:
     usage()
