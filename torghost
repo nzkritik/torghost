@@ -817,6 +817,121 @@ def apply_ipv6_block(tor_uid):
 	except Exception as e:
 		warn(f"Failed to apply IPv6 block rules: {e}")
 
+def diagnose_dns():
+    """
+    Collect diagnostic information for Tor and DNS listener issues.
+    Intended to be run as root (sudo) so it can read journal and socket info.
+    """
+    info("Starting diagnostic dump for Tor / DNS issues...")
+
+    def run(cmd):
+        try:
+            p = subprocess.run(cmd, capture_output=True, text=True)
+            out = p.stdout.strip()
+            if p.stderr:
+                out += ("\n" + p.stderr.strip())
+            return p.returncode, out
+        except Exception as e:
+            return 1, f"Exception running {' '.join(cmd)}: {e}"
+
+    # 1) show listening UDP/TCP sockets
+    print("\n--- Listening UDP sockets (ss -ulpn) ---")
+    _, out = run(['ss', '-ulpn'])
+    print(out)
+
+    print("\n--- Listening TCP sockets (ss -ltnp) ---")
+    _, out = run(['ss', '-ltnp'])
+    print(out)
+
+    # 2) check specific ports of interest
+    for port in ('53', '5353', '9040', '9050', '9051'):
+        print(f"\n--- ss listener check for 127.0.0.1:{port} ---")
+        _, out = run(['ss', '-ulpn', f'src', f'127.0.0.1:{port}'])
+        print(out)
+
+    # 3) tor service status + recent logs
+    print("\n--- systemctl status tor (short) ---")
+    _, out = run(['systemctl', 'status', 'tor', '--no-pager'])
+    print(out)
+
+    print("\n--- journalctl -u tor (last 200 lines) ---")
+    _, out = run(['journalctl', '-u', 'tor', '-n', '200', '--no-pager'])
+    print(out)
+
+    # 4) show /etc/tor/torrc snippet (if readable)
+    print("\n--- /etc/tor/torrc (first 200 lines) ---")
+    try:
+        with open(TORRC_PATH, 'r') as f:
+            for i, line in enumerate(f):
+                if i >= 200:
+                    break
+                print(line.rstrip())
+    except Exception as e:
+        print(f"Could not read {TORRC_PATH}: {e}")
+
+    # 5) show backup torrc if present
+    bak = TORRC_PATH + '.bak-torghost'
+    if os.path.exists(bak):
+        print(f"\n--- {bak} (first 200 lines) ---")
+        try:
+            with open(bak, 'r') as f:
+                for i, line in enumerate(f):
+                    if i >= 200:
+                        break
+                    print(line.rstrip())
+        except Exception as e:
+            print(f"Could not read {bak}: {e}")
+
+    # 6) try DNS queries against 127.0.0.1:53 and 127.0.0.1:5353 using dig (if available)
+    dig = shutil.which('dig')
+    if dig:
+        for p in (53, 5353):
+            print(f"\n--- dig test against 127.0.0.1:{p} for example.com ---")
+            rc, out = run([dig, f'@127.0.0.1', '-p', str(p), 'example.com', '+short', '+time=2'])
+            if out.strip():
+                print(out.strip())
+            else:
+                print("(no response or timed out)")
+    else:
+        print("\n'dig' not found on system; skipping active DNS queries. Install bind/dnsutils for active testing.")
+
+    # 7) try to query Tor control for listener info and bootstrap-phase if auth works
+    try:
+        with Controller.from_port(port=9051) as controller:
+            try:
+                controller.authenticate()
+                print("\nAuthenticated to Tor control port.")
+            except Exception as e:
+                print(f"\nCould not authenticate to Tor control port: {e}")
+                controller = None
+
+            if controller:
+                try:
+                    val = controller.get_info("status/bootstrap-phase")
+                    print(f"\nstatus/bootstrap-phase: {val}")
+                except Exception as e:
+                    print(f"\nCould not get bootstrap info: {e}")
+                # Try several listener-related keys
+                for key in ("net/listeners/socks", "net/listeners/control", "net/listeners/dir", "net/listeners/or"):
+                    try:
+                        v = controller.get_info(key)
+                        print(f"\nGETINFO {key}: {v}")
+                    except Exception:
+                        pass
+    except Exception as e:
+        print(f"\nCould not open Tor control port connection: {e}")
+
+    # 8) show resolv.conf
+    print("\n--- /etc/resolv.conf (current) ---")
+    try:
+        with open('/etc/resolv.conf', 'r') as rf:
+            print(rf.read().strip())
+    except Exception as e:
+        print(f"Could not read /etc/resolv.conf: {e}")
+
+    print("\n--- End of diagnostic dump ---")
+    info("Diagnostic dump complete. Review outputs above for missing listeners, tor logs, or permission errors.")
+
 
 def dns_leak_check(duration=6):
 	"""
@@ -1011,117 +1126,3 @@ elif command in ("check-leak", "checkleak", "diag", "diagnose"):
 else:
     usage()
 
-def diagnose_dns():
-    """
-    Collect diagnostic information for Tor and DNS listener issues.
-    Intended to be run as root (sudo) so it can read journal and socket info.
-    """
-    info("Starting diagnostic dump for Tor / DNS issues...")
-
-    def run(cmd):
-        try:
-            p = subprocess.run(cmd, capture_output=True, text=True)
-            out = p.stdout.strip()
-            if p.stderr:
-                out += ("\n" + p.stderr.strip())
-            return p.returncode, out
-        except Exception as e:
-            return 1, f"Exception running {' '.join(cmd)}: {e}"
-
-    # 1) show listening UDP/TCP sockets
-    print("\n--- Listening UDP sockets (ss -ulpn) ---")
-    _, out = run(['ss', '-ulpn'])
-    print(out)
-
-    print("\n--- Listening TCP sockets (ss -ltnp) ---")
-    _, out = run(['ss', '-ltnp'])
-    print(out)
-
-    # 2) check specific ports of interest
-    for port in ('53', '5353', '9040', '9050', '9051'):
-        print(f"\n--- ss listener check for 127.0.0.1:{port} ---")
-        _, out = run(['ss', '-ulpn', f'src', f'127.0.0.1:{port}'])
-        print(out)
-
-    # 3) tor service status + recent logs
-    print("\n--- systemctl status tor (short) ---")
-    _, out = run(['systemctl', 'status', 'tor', '--no-pager'])
-    print(out)
-
-    print("\n--- journalctl -u tor (last 200 lines) ---")
-    _, out = run(['journalctl', '-u', 'tor', '-n', '200', '--no-pager'])
-    print(out)
-
-    # 4) show /etc/tor/torrc snippet (if readable)
-    print("\n--- /etc/tor/torrc (first 200 lines) ---")
-    try:
-        with open(TORRC_PATH, 'r') as f:
-            for i, line in enumerate(f):
-                if i >= 200:
-                    break
-                print(line.rstrip())
-    except Exception as e:
-        print(f"Could not read {TORRC_PATH}: {e}")
-
-    # 5) show backup torrc if present
-    bak = TORRC_PATH + '.bak-torghost'
-    if os.path.exists(bak):
-        print(f"\n--- {bak} (first 200 lines) ---")
-        try:
-            with open(bak, 'r') as f:
-                for i, line in enumerate(f):
-                    if i >= 200:
-                        break
-                    print(line.rstrip())
-        except Exception as e:
-            print(f"Could not read {bak}: {e}")
-
-    # 6) try DNS queries against 127.0.0.1:53 and 127.0.0.1:5353 using dig (if available)
-    dig = shutil.which('dig')
-    if dig:
-        for p in (53, 5353):
-            print(f"\n--- dig test against 127.0.0.1:{p} for example.com ---")
-            rc, out = run([dig, f'@127.0.0.1', '-p', str(p), 'example.com', '+short', '+time=2'])
-            if out.strip():
-                print(out.strip())
-            else:
-                print("(no response or timed out)")
-    else:
-        print("\n'dig' not found on system; skipping active DNS queries. Install bind/dnsutils for active testing.")
-
-    # 7) try to query Tor control for listener info and bootstrap-phase if auth works
-    try:
-        with Controller.from_port(port=9051) as controller:
-            try:
-                controller.authenticate()
-                print("\nAuthenticated to Tor control port.")
-            except Exception as e:
-                print(f"\nCould not authenticate to Tor control port: {e}")
-                controller = None
-
-            if controller:
-                try:
-                    val = controller.get_info("status/bootstrap-phase")
-                    print(f"\nstatus/bootstrap-phase: {val}")
-                except Exception as e:
-                    print(f"\nCould not get bootstrap info: {e}")
-                # Try several listener-related keys
-                for key in ("net/listeners/socks", "net/listeners/control", "net/listeners/dir", "net/listeners/or"):
-                    try:
-                        v = controller.get_info(key)
-                        print(f"\nGETINFO {key}: {v}")
-                    except Exception:
-                        pass
-    except Exception as e:
-        print(f"\nCould not open Tor control port connection: {e}")
-
-    # 8) show resolv.conf
-    print("\n--- /etc/resolv.conf (current) ---")
-    try:
-        with open('/etc/resolv.conf', 'r') as rf:
-            print(rf.read().strip())
-    except Exception as e:
-        print(f"Could not read /etc/resolv.conf: {e}")
-
-    print("\n--- End of diagnostic dump ---")
-    info("Diagnostic dump complete. Review outputs above for missing listeners, tor logs, or permission errors.")
