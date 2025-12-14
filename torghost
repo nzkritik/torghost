@@ -25,6 +25,7 @@ import signal
 import shutil
 import socket  # added for port checks
 import threading  # new: used for check-leak monitor
+import re  # new: for parsing Tor bootstrap progress
 
 # --- Third-party dependency check -------------------------------------------
 # 'stem' is required to control the Tor process via its control port and to
@@ -385,6 +386,10 @@ def start_torghost():
         error("Tor control port 9051 did not become available in time. Aborting.", fatal=True)
     success("Tor control port is reachable.")
 
+    # Wait for Tor bootstrap to complete before making system-wide DNS/iptables changes
+    if not wait_for_bootstrap(timeout=120):
+        error("Tor did not finish bootstrapping. Aborting to avoid leaving the system without working DNS/routes.", fatal=True)
+
     # Wait for TransPort (9040) to be listening (required for transparent proxying)
     info("Waiting for Tor TransPort (127.0.0.1:9040) to become available (timeout 30s)...")
     if not wait_for_port('127.0.0.1', 9040, timeout=30):
@@ -649,9 +654,18 @@ def switch_tor():
     the exit node and changing the apparent public IP. Wait a short time for
     the circuit to be established and then report the new IP.
     """
-    with Controller.from_port(port=9051) as controller:
-        controller.authenticate()
-        controller.signal(Signal.NEWNYM)
+    try:
+        with Controller.from_port(port=9051) as controller:
+            try:
+                controller.authenticate()
+            except Exception as e:
+                error("Failed to authenticate to Tor control port. Ensure CookieAuthentication or HashedControlPassword is configured and the script has access to the control auth cookie.", fatal=False)
+                return
+            controller.signal(Signal.NEWNYM)
+    except Exception as e:
+        error(f"Failed to connect to Tor control port: {e}", fatal=False)
+        return
+
     # Allow time for the new circuit to be used
     time.sleep(5)
     print(f"{t()} CURRENT IP: {bcolors.GREEN}{get_ip()}{bcolors.ENDC}")
@@ -831,6 +845,44 @@ def monitor_leaks(interval=10):
 	stop_event.set()
 	watcher.join(timeout=1)
 	info("Leak monitor stopped. Returning to shell.")
+
+# New helper: wait for Tor bootstrap to complete
+def wait_for_bootstrap(timeout=120, poll_interval=2):
+    """
+    Connect to Tor's control port and wait until bootstrap progress reaches 100%.
+    Returns True if bootstrap completed, False otherwise.
+    Attempts to authenticate via available methods; logs warnings if auth fails.
+    """
+    info("Connecting to Tor control port to monitor bootstrap progress...")
+    deadline = time.time() + timeout
+    try:
+        with Controller.from_port(port=9051) as controller:
+            try:
+                controller.authenticate()
+                info("Authenticated to Tor control port.")
+            except Exception as e:
+                warn(f"Could not authenticate to Tor control port: {e}. Some control features will be unavailable.")
+                # We still attempt to read bootstrap-phase (may fail), so continue
+
+            while time.time() < deadline:
+                try:
+                    val = controller.get_info("status/bootstrap-phase")
+                    # example: 'PROGRESS=80 TAG=... SUMMARY="..."'
+                    m = re.search(r'PROGRESS=(\d+)', val)
+                    progress = int(m.group(1)) if m else 0
+                    info(f"Tor bootstrap progress: {progress}%")
+                    if progress >= 100:
+                        success("Tor bootstrap reached 100%")
+                        return True
+                except Exception:
+                    # ignore transient read errors and retry
+                    pass
+                time.sleep(poll_interval)
+            warn("Timed out waiting for Tor to finish bootstrapping.")
+            return False
+    except Exception as e:
+        warn(f"Failed to connect to Tor control port for bootstrap check: {e}")
+        return False
 
 # --- Main execution flow ----------------------------------------------------
 # Install a SIGINT handler to allow graceful exit with Ctrl-C.
