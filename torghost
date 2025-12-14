@@ -2,49 +2,22 @@
 """
 TorGhost - Clean and Working Version
 """
-
 import os
 import sys
 import subprocess
-
-# Check if running as sudo
-if os.geteuid() != 0:
-    print("This script requires sudo privileges.")
-    os.execvp('sudo', ['sudo', sys.executable] + sys.argv)
-
-# # Venv and dependency management
-# venv_dir = os.path.join(os.path.expanduser('~'), '.venv')
-# if not os.path.exists(venv_dir):
-#     print(f"Creating virtual environment in {venv_dir}...")
-#     try:
-#         subprocess.run([sys.executable, '-m', 'venv', venv_dir], check=True)
-#     except subprocess.CalledProcessError:
-#         print("Failed to create virtual environment. Please ensure the 'venv' module is available.")
-#         sys.exit(1)
-
-# venv_python = os.path.join(venv_dir, 'bin', 'python')
-# if sys.executable != os.path.abspath(venv_python):
-#     print("Relaunching in virtual environment...")
-#     os.execv(venv_python, [venv_python] + sys.argv)
-
-# # The script now runs inside the venv. Deactivation is not needed;
-# # when the script exits, the process ends, and the parent shell is unaffected.
-
-# # Install/Upgrade dependencies
-# try:
-#     subprocess.run(
-#         [sys.executable, '-m', 'pip', 'install', '--upgrade', 'stem'], 
-#         check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
-#     )
-# except subprocess.CalledProcessError:
-#     print("Failed to install dependencies. Please check your internet connection and pip configuration.")
-#     sys.exit(1)
-
 import time
 import signal
 import shutil
-from stem import Signal
-from stem.control import Controller
+
+# Ensure stem is available with a helpful message if missing
+try:
+    from stem import Signal
+    from stem.control import Controller
+except Exception:
+    print("Required Python package 'stem' is not installed.")
+    print("On Arch: sudo pacman -S python-stem")
+    print("Or with pip: pip install stem")
+    sys.exit(1)
 
 
 class bcolors:
@@ -306,7 +279,7 @@ def show_status():
     print(f"Current IP: {ip}")
 
 
-# Main execution - remove redundant root check
+# Main execution
 signal.signal(signal.SIGINT, sigint_handler)
 
 if len(sys.argv) < 2:

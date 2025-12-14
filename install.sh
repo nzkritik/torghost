@@ -93,22 +93,9 @@ pretty_info "Torghost made by Technical Dada"
 pretty_info "Updated for Arch by nzKritiK"
 printf "\n"
 
-# Check and manage virtual environment
-# VENV_PATH="$HOME/.venv"
-# if [ -d "$VENV_PATH" ]; then
-# 	pretty_info "=====> Activating existing virtual environment"
-# 	source "$VENV_PATH/bin/activate"
-# else
-# 	pretty_info "=====> Creating virtual environment"
-# 	python -m venv "$VENV_PATH"
-# 	source "$VENV_PATH/bin/activate"
-# fi
-
 # Install dependencies for Arch Linux
 pretty_info "=====> Installing dependencies using pacman"
-sudo pacman -S --noconfirm tor python-pip python-stem 
-
-# pip install stem
+sudo pacman -S --noconfirm tor python-stem 
 
 pretty_info "=====> Installing TorGhost"
 sudo cp torghost /usr/local/bin/torghost
