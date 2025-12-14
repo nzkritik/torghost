@@ -291,7 +291,7 @@ nickname TorGhostNode
 VirtualAddrNetwork 10.0.0.0/10
 AutomapHostsOnResolve 1
 TransPort 9040
-DNSPort 53
+DNSPort 5353
 ControlPort 9051
 """
 
@@ -633,14 +633,14 @@ def start_torghost():
     except Exception as e:
         warn(f"Could not check/stop systemd-resolved: {e}")
 
-    # default DNS port we will direct to (may fallback to 5353)
-    dns_port = 53
+    # default DNS port Tor will use (prefer 5353 to avoid systemd-resolved conflicts)
+    dns_port = 5353
 
-    info("Waiting for Tor DNSPort (127.0.0.1:53) to be available (timeout 15s)...")
-    if not wait_for_port('127.0.0.1', 53, timeout=15):
-        warn("Tor DNSPort 53 not reachable. Attempting fallback to DNSPort 5353...")
-        # Attempt to reconfigure tor to use 5353
-        if set_tor_dnsport(5353):
+    info(f"Waiting for Tor DNSPort (127.0.0.1:{dns_port}) to be available (timeout 15s)...")
+    if not wait_for_port('127.0.0.1', dns_port, timeout=15):
+        warn(f"Tor DNSPort {dns_port} not reachable. Attempting fallback to DNSPort 53...")
+        # Attempt to reconfigure tor to use 53
+        if set_tor_dnsport(53):
             try:
                 subprocess.run(['systemctl', 'restart', 'tor'], check=False)
             except Exception:
@@ -650,10 +650,10 @@ def start_torghost():
                 error("Tor control port did not come back after restart. Aborting.", fatal=True)
             if not wait_for_bootstrap(timeout=60):
                 error("Tor did not finish bootstrapping after restart. Aborting.", fatal=True)
-            # now check for DNSPort 5353
-            if wait_for_port('127.0.0.1', 5353, timeout=15):
-                dns_port = 5353
-                success("Tor DNSPort 5353 is reachable; using fallback DNS port.")
+            # now check for DNSPort 53
+            if wait_for_port('127.0.0.1', 53, timeout=15):
+                dns_port = 53
+                success("Tor DNSPort 53 is reachable; using fallback DNS port.")
             else:
                 error("Tor DNSPort not listening after fallback restart — aborting start to avoid breaking DNS.", fatal=True)
         else:
