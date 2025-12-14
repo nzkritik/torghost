@@ -449,6 +449,51 @@ def is_docker_active():
     except Exception:
         return False
 
+def ensure_checkpoint_dir():
+    """Ensure the checkpoint directory exists with proper permissions."""
+    try:
+        os.makedirs('/run/torghost', exist_ok=True)
+        os.chmod('/run/torghost', 0o700)
+        info("Created checkpoint directory at /run/torghost")
+    except Exception as e:
+        warn(f"Could not create checkpoint directory: {e}")
+
+def is_docker_active():
+    """Check if Docker service is active."""
+    try:
+        result = subprocess.run(['systemctl', 'is-active', 'docker'],
+                               capture_output=True, text=True)
+        return result.stdout.strip() == 'active'
+    except Exception:
+        return False
+
+def set_tor_dnsport(port):
+    """Force Tor to use a specific DNS port by modifying torrc."""
+    try:
+        torrc_path = '/etc/tor/torrc'
+        # Backup original if needed
+        if not os.path.exists(f"{torrc_path}.bak-original"):
+            shutil.copy(torrc_path, f"{torrc_path}.bak-original")
+        
+        # Read current config
+        with open(torrc_path, 'r') as f:
+            lines = f.readlines()
+        
+        # Remove existing DNSPort lines
+        new_lines = [line for line in lines if not line.startswith('DNSPort')]
+        
+        # Add our DNSPort setting
+        new_lines.append(f"DNSPort 127.0.0.1:{port}\n")
+        
+        # Write updated config
+        with open(torrc_path, 'w') as f:
+            f.writelines(new_lines)
+        
+        success(f"Configured Tor to use DNSPort {port}")
+        return True
+    except Exception as e:
+        error(f"Failed to set Tor DNSPort: {e}", fatal=True)
+
 def stop_docker_and_wait(timeout=15):
     """Stop Docker service and handle DOCKER PREROUTING rules."""
     try:
@@ -936,31 +981,91 @@ def restore_system_state():
 
 # --- Core operational functions ----------------------------------------------
 def start_torghost():
-    """
-    Start TorGhost with comprehensive error handling and checkpoints at each stage.
-    Steps:
-    1. Create initial checkpoint
-    2. Stop and mask systemd-resolved
-    3. Stop Docker if running
-    4. Backup and configure resolv.conf
-    5. Configure Tor
-    6. Start Tor service
-    7. Verify Tor bootstrap
-    8. Apply iptables rules
-    9. Verify connectivity
-    """
+    """Start TorGhost with comprehensive pre-checks and conflict resolution."""
     logo()
-    prepare_system_for_tor()
     info("Starting TorGhost - routing all traffic through Tor")
     
-    # Setup logging
+    # --- CRITICAL PRE-START CHECKS ---
+    # 1. Stop Docker completely with thorough cleanup
+    if is_docker_active():
+        info("Docker service is running - this WILL interfere with Tor transparent proxying")
+        info("Stopping Docker and cleaning up its iptables rules...")
+        
+        # Stop docker service
+        subprocess.run(['systemctl', 'stop', 'docker'], check=False)
+        
+        # Remove ALL docker-related iptables rules
+        try:
+            # Clean nat table completely
+            subprocess.run(['iptables', '-t', 'nat', '-F'], check=False)
+            subprocess.run(['iptables', '-t', 'nat', '-X', 'DOCKER'], check=False)
+            
+            # Clean filter table DOCKER rules
+            subprocess.run(['iptables', '-F', 'DOCKER'], check=False)
+            subprocess.run(['iptables', '-X', 'DOCKER'], check=False)
+            
+            # Remove any docker chains
+            subprocess.run(['bash', '-c', 'iptables -L | grep "^Chain DOCKER" | cut -d" " -f2 | xargs -r -n1 iptables -X'], check=False)
+            
+            success("Docker iptables rules cleaned up")
+        except Exception as e:
+            warn(f"Failed to clean Docker iptables rules: {e}")
+    else:
+        info("Docker service is not running - good for Tor operation")
+    
+    # 2. Ensure systemd-resolved is properly masked
+    try:
+        # Check if systemd-resolved is masked
+        result = subprocess.run(['systemctl', 'is-enabled', 'systemd-resolved'], 
+                               capture_output=True, text=True)
+        if 'masked' not in result.stdout.lower():
+            info("Masking systemd-resolved to prevent DNS conflicts...")
+            subprocess.run(['systemctl', 'mask', 'systemd-resolved'], check=False)
+            subprocess.run(['systemctl', 'stop', 'systemd-resolved'], check=False)
+            success("systemd-resolved has been masked and stopped")
+    except Exception as e:
+        warn(f"Could not mask systemd-resolved: {e}")
+    
+    # 3. Handle Avahi conflict on port 5353
+    try:
+        # Check if anything is listening on 5353
+        result = subprocess.run(['ss', '-lun', '( sport = :5353 )'], 
+                               capture_output=True, text=True)
+        if 'LISTEN' in result.stdout or 'UNCONN' in result.stdout:
+            info("Port 5353 is in use - configuring Tor to use port 53 directly")
+            # Force Tor to use port 53 instead of 5353
+            set_tor_dnsport(53)
+            # Stop avahi temporarily if it's the culprit
+            if 'avahi' in result.stdout:
+                info("Stopping avahi-daemon temporarily to free port 5353")
+                subprocess.run(['systemctl', 'stop', 'avahi-daemon'], check=False)
+    except Exception as e:
+        warn(f"Could not check port 5353 status: {e}")
+    
+    # 4. Create checkpoint directory early
+    ensure_checkpoint_dir()
+    
+    # 5. Verify no other services are using port 53
+    try:
+        result = subprocess.run(['ss', '-lun', '( sport = :domain )'], 
+                               capture_output=True, text=True)
+        if 'LISTEN' in result.stdout or 'UNCONN' in result.stdout:
+            warn("Port 53 is still in use by another service! This will prevent Tor from starting properly.")
+            warn("Please identify and stop the conflicting service manually before continuing.")
+            # Show which process is using port 53
+            subprocess.run(['ss', '-lunp', '( sport = :domain )'])
+            error("Cannot proceed with port 53 conflicts. Resolve manually and retry.", fatal=True)
+    except Exception as e:
+        warn(f"Could not check port 53 status: {e}")
+    
+    # 6. Setup logging
     logging.basicConfig(
         filename='/var/log/torghost.log',
         level=logging.DEBUG,
         format='%(asctime)s - %(levelname)s - %(message)s'
     )
     
-    # Initial checkpoint
+    # 7. Initial checkpoint
     initial_checkpoint = {
         'started_at': time.time(),
         'user': os.environ.get('SUDO_USER', os.environ.get('USER', 'unknown')),
@@ -968,33 +1073,33 @@ def start_torghost():
     }
     create_checkpoint('start_init', initial_checkpoint)
     
-    # 1. Save current iptables state
+    # 8. Save current iptables state
     info("Saving current firewall state...")
     save_iptables_snapshot()
     create_checkpoint('iptables_saved', {'note': 'original firewall state saved'})
     
-    # 2. Check for conflicting NAT rules
+    # 9. Check for conflicting NAT rules
     if detect_nat_conflicts():
         error("Conflicting NAT rules detected. This could cause network loops or break connectivity. "
              "Please review your firewall rules or run in a clean environment.", fatal=True)
     
-    # 3. Stop systemd-resolved
+    # 10. Stop systemd-resolved
     if not stop_systemd_resolved():
         error("Could not stop systemd-resolved. This is required for Tor to bind to port 53. "
              "Please stop it manually and try again.", fatal=True)
     
-    # 4. Stop Docker if running
+    # 11. Stop Docker if running
     stop_docker_and_wait()
     
-    # 5. Backup resolv.conf
+    # 12. Backup resolv.conf
     if not backup_resolv_conf():
         warn("Could not backup resolv.conf, proceeding anyway")
     
-    # 6. Configure Tor
+    # 13. Configure Tor
     ensure_tor_config()
     create_checkpoint('tor_configured', {'torrc_path': TORRC_PATH})
     
-    # 7. Start Tor service
+    # 14. Start Tor service
     info("Starting Tor service...")
     try:
         subprocess.run(['systemctl', 'restart', 'tor'], check=True, timeout=30)
@@ -1009,25 +1114,25 @@ def start_torghost():
              "  - Configuration errors in /etc/tor/torrc", 
              fatal=True)
     
-    # 8. Wait for Tor control port
+    # 15. Wait for Tor control port
     info("Waiting for Tor control port to be ready...")
     if not wait_for_port('127.0.0.1', 9051, timeout=60):
         error("Tor control port did not become available. Check 'journalctl -u tor' for errors.", 
              fatal=True)
     success("Tor control port is ready")
     
-    # 9. Wait for Tor bootstrap
+    # 16. Wait for Tor bootstrap
     if not wait_for_bootstrap(timeout=180):
         error("Tor failed to bootstrap. Check 'journalctl -u tor' for detailed errors.", 
              fatal=True)
     
-    # 10. Configure DNS
+    # 17. Configure DNS
     info("Configuring DNS to use Tor...")
     if not configure_tor_dns():
         error("Failed to configure DNS. System may lose internet connectivity.", 
              fatal=True)
     
-    # 11. Wait for Tor DNS port
+    # 18. Wait for Tor DNS port
     info("Waiting for Tor DNS to be ready on port 5353...")
     if not wait_for_port('127.0.0.1', 5353, timeout=30):
         warn("Tor DNS not ready on port 5353, trying port 53...")
@@ -1044,7 +1149,7 @@ def start_torghost():
         dns_port = 5353
         success("Tor DNS ready on port 5353")
     
-    # 12. Get Tor UID
+    # 19. Get Tor UID
     info("Getting Tor user UID...")
     try:
         tor_uid = subprocess.run(['id', '-u', 'tor'], 
@@ -1053,10 +1158,10 @@ def start_torghost():
     except Exception as e:
         error(f"Could not get Tor UID: {e}", fatal=True)
     
-    # 13. Disable IPv6
+    # 20. Disable IPv6
     disable_ipv6()
     
-    # 14. Apply iptables rules
+    # 21. Apply iptables rules
     info("Applying firewall rules to route traffic through Tor...")
     iptables_script = IPTABLESSCRIPT.format(tor_uid=tor_uid, dns_port=dns_port)
     
@@ -1067,11 +1172,11 @@ def start_torghost():
     except Exception as e:
         error(f"Failed to apply firewall rules: {e}", fatal=True)
     
-    # 15. Verify connectivity
+    # 22. Verify connectivity
     info("Verifying connectivity through Tor...")
     current_ip = get_ip()
     
-    # 16. Final checkpoint
+    # 23. Final checkpoint
     final_checkpoint = {
         'completed_at': time.time(),
         'current_ip': current_ip,
