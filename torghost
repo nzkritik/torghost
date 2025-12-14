@@ -393,6 +393,8 @@ def start_torghost():
             success("Tor configuration appended to /etc/tor/torrc.")
         else:
             info("Tor configuration marker already present; skipping append.")
+    # ensure cookie auth lines are present (idempotent)
+        ensure_cookie_auth_in_torrc()
     except IOError as e:
         error(f"Error modifying torrc: {e}", fatal=True)
 
@@ -411,7 +413,10 @@ def start_torghost():
         error("Tor control port 9051 did not become available in time. Aborting.", fatal=True)
     success("Tor control port is reachable.")
 
-    # Wait for Tor bootstrap to complete before making system-wide DNS/iptables changes
+    # Wait for cookie to exist before attempting to authenticate / bootstrap
+    if not wait_for_cookie('/run/tor/control.authcookie', timeout=30):
+        warn("Auth cookie not found; authentication to the control port may fail. Check tor logs.")
+    # proceed to bootstrap check (authenticate will now succeed if cookie present)
     if not wait_for_bootstrap(timeout=120):
         error("Tor did not finish bootstrapping. Aborting to avoid leaving the system without working DNS/routes.", fatal=True)
 
