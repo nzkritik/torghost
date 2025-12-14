@@ -482,7 +482,7 @@ def start_torghost():
         else:
             info("Tor configuration marker already present; skipping append.")
     # ensure cookie auth lines are present (idempotent) and get chosen cookie path
-		cookie_path = ensure_cookie_auth_in_torrc()
+        cookie_path = ensure_cookie_auth_in_torrc()
 		if not cookie_path:
 			error("Failed to ensure CookieAuthentication in torrc; aborting.", fatal=True)
 	except IOError as e:
