@@ -869,7 +869,7 @@ def start_torghost():
                 "  sudo rm /etc/resolv.conf  # if it's a symlink to the stub (be careful!)\n"
                 "Then re-run: sudo torghost start",
                 fatal=True
-            )
+            
     except Exception as e:
         # non-fatal but inform
         warn(f"Failed to sanity-check /etc/resolv.conf: {e}")
