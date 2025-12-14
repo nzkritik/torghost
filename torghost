@@ -137,27 +137,62 @@ def usage():
 def get_ip():
     """
     Query an external service (api.ipify.org) to fetch the public IP.
-    Uses curl via subprocess; if curl is missing, warn and return "Unknown".
+
+    Strategy:
+    1) Quick local curl attempt (short timeouts).
+    2) If that fails or times out, attempt via Tor SOCKS5 proxy at 127.0.0.1:9050,
+       retrying a few times to allow circuits to bootstrap.
+    3) Return "Unknown" and warn if all attempts fail.
+
+    This avoids long curl hangs (exit status 28) and works when Tor is active
+    by sending the request over the Tor SOCKS proxy.
     """
-    # quick check for curl to provide actionable feedback
+    # Ensure curl exists first
     if shutil.which('curl') is None:
         warn("curl not found — cannot query external IP (install curl to enable).")
         return "Unknown"
 
-    try:
-        result = subprocess.run(['curl', '-s', 'https://api.ipify.org'],
-                                capture_output=True, text=True, check=True)
-        ip = result.stdout.strip()
-        if not ip:
-            warn("ipify returned empty response.")
-            return "Unknown"
-        return ip
-    except subprocess.CalledProcessError as e:
-        warn(f"Failed to query external IP: {e}")
-        return "Unknown"
-    except Exception as e:
-        warn(f"Unexpected error while querying IP: {e}")
-        return "Unknown"
+    # 1) Try direct curl with short timeouts (may fail if DNS/Network routed via Tor)
+    direct_attempts = 2
+    for attempt in range(1, direct_attempts + 1):
+        info(f"Querying external IP (direct) attempt {attempt}/{direct_attempts}...")
+        try:
+            res = subprocess.run(
+                ['curl', '-s', '--connect-timeout', '5', '--max-time', '10', 'https://api.ipify.org'],
+                capture_output=True, text=True
+            )
+            if res.returncode == 0 and res.stdout.strip():
+                ip = res.stdout.strip()
+                success(f"External IP detected (direct): {ip}")
+                return ip
+            else:
+                warn(f"Direct curl attempt {attempt} failed (exit {res.returncode}).")
+        except Exception as e:
+            warn(f"Direct curl attempt {attempt} raised exception: {e}")
+        time.sleep(1)
+
+    # 2) Fall back to using Tor SOCKS5 proxy (expects Tor's SocksPort on 127.0.0.1:9050)
+    socks_attempts = 5
+    for attempt in range(1, socks_attempts + 1):
+        info(f"Querying external IP via Tor SOCKS5 attempt {attempt}/{socks_attempts}...")
+        try:
+            res = subprocess.run(
+                ['curl', '-s', '--socks5-hostname', '127.0.0.1:9050', '--connect-timeout', '5', '--max-time', '15', 'https://api.ipify.org'],
+                capture_output=True, text=True
+            )
+            if res.returncode == 0 and res.stdout.strip():
+                ip = res.stdout.strip()
+                success(f"External IP detected via Tor: {ip}")
+                return ip
+            else:
+                warn(f"Tor SOCKS curl attempt {attempt} failed (exit {res.returncode}). Retrying...")
+        except Exception as e:
+            warn(f"Tor SOCKS curl attempt {attempt} raised exception: {e}")
+        time.sleep(2)
+
+    # All attempts failed
+    warn("Unable to determine external IP after multiple attempts; returning 'Unknown'.")
+    return "Unknown"
 
 
 # New helper: wait for a TCP port to be reachable on host
