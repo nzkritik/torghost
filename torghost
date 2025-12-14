@@ -214,6 +214,68 @@ def get_ip():
     warn("Unable to determine external IP after multiple attempts")
     return "Unknown"
 
+def prepare_system_for_tor():
+    """Completely prepare the system for Tor by stopping interfering services."""
+    info("Preparing system for Tor by stopping interfering services...")
+    
+    # 1. Stop and mask systemd-resolved completely
+    try:
+        # Stop the service and its socket
+        subprocess.run(['systemctl', 'stop', 'systemd-resolved'], check=False)
+        subprocess.run(['systemctl', 'stop', 'systemd-resolved.socket'], check=False)
+        subprocess.run(['systemctl', 'mask', 'systemd-resolved'], check=False)
+        
+        # Verify it's not running
+        result = subprocess.run(['systemctl', 'is-active', 'systemd-resolved'], 
+                               capture_output=True, text=True)
+        if result.stdout.strip() == 'active':
+            warn("systemd-resolved is still active after stop attempt!")
+        
+        success("systemd-resolved stopped and masked")
+    except Exception as e:
+        warn(f"Error stopping systemd-resolved: {e}")
+    
+    # 2. Ensure resolv.conf is a regular file pointing to localhost
+    try:
+        # Remove symlink if it exists
+        if os.path.islink('/etc/resolv.conf'):
+            info("Removing systemd-resolved symlink at /etc/resolv.conf")
+            os.remove('/etc/resolv.conf')
+        
+        # Create a clean resolv.conf
+        with open('/etc/resolv.conf', 'w') as f:
+            f.write("nameserver 127.0.0.1\n")
+            f.write("options timeout:1\n")
+        
+        success("Created clean /etc/resolv.conf pointing to localhost")
+    except Exception as e:
+        error(f"Failed to create clean resolv.conf: {e}", fatal=True)
+    
+    # 3. Verify port 53 is free
+    info("Verifying port 53 is free...")
+    try:
+        result = subprocess.run(['ss', '-lun', '( sport = :domain )'], 
+                               capture_output=True, text=True)
+        if 'LISTEN' in result.stdout or 'UNCONN' in result.stdout:
+            warn("Port 53 appears to still be in use. Attempting to identify process:")
+            subprocess.run(['ss', '-lunp', '( sport = :domain )'])
+            
+            # Try to kill any remaining processes using port 53
+            subprocess.run(['pkill', '-f', 'systemd-resolved'], check=False)
+            time.sleep(2)
+        
+        # Final verification
+        result = subprocess.run(['ss', '-lun', '( sport = :domain )'], 
+                               capture_output=True, text=True)
+        if 'LISTEN' in result.stdout or 'UNCONN' in result.stdout:
+            error("Port 53 is still occupied after cleanup attempts. Please check manually with 'sudo ss -lunp \"sport = :domain\"'", fatal=True)
+        else:
+            success("Port 53 is now free")
+    except Exception as e:
+        warn(f"Error checking port 53 status: {e}")
+    
+    return True
+
 # Helper: wait for a TCP port to be reachable
 def wait_for_port(host, port, timeout=60, interval=1):
     """
