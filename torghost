@@ -278,11 +278,9 @@ def restore_ipv6():
         warn(f"Failed to restore IPv6 settings: {e}")
 
 # --- Constants -------------------------------------------------------------
-# Centralize tor configuration path and marker so templates can be evaluated
 TORRC_PATH = '/etc/tor/torrc'
 TORRC_MARKER = '## TorGhost Configuration'
 IPV6_BACKUP_FILE = '/etc/tor/torghost-ipv6-backup'
-# Marker file to note we stopped systemd-resolved so we can restart it on stop
 RESOLVED_STOP_MARKER = '/run/torghost-stopped-systemd-resolved'
 
 # Use the module-level marker constant (do not reference a local variable that
@@ -297,6 +295,31 @@ DNSPort 53
 ControlPort 9051
 """
 
+def set_tor_dnsport(port):
+    """
+    Set DNSPort in torrc to the given port, backing up the original torrc.
+    Returns True on success, False otherwise.
+    """
+    try:
+        # Read and backup
+        with open(TORRC_PATH, 'r') as f:
+            data = f.read()
+        with open(TORRC_PATH + '.bak-torghost', 'w') as f:
+            f.write(data)
+        # Replace existing DNSPort line or append
+        if re.search(r'^\s*DNSPort\s+\d+', data, flags=re.M):
+            new = re.sub(r'^\s*DNSPort\s+\d+', f'DNSPort {port}', data, flags=re.M)
+        else:
+            new = data.rstrip() + f"\nDNSPort {port}\n"
+        with open(TORRC_PATH, 'w') as f:
+            f.write(new)
+        success(f"Set Tor DNSPort to {port} in {TORRC_PATH} (backup created).")
+        return True
+    except Exception as e:
+        warn(f"Failed to set DNSPort in torrc: {e}")
+        return False
+
+# Update iptables template to use a dns_port placeholder (used later with .format)
 IPTABLESSCRIPT = """
 iptables -F
 iptables -t nat -F
@@ -313,9 +336,9 @@ iptables -t nat -A OUTPUT -d 100.64.0.0/10 -j RETURN
 iptables -t nat -A OUTPUT -d 169.254.0.0/16 -j RETURN
 iptables -t nat -A OUTPUT -d 224.0.0.0/4 -j RETURN
 
-# Redirect DNS (UDP & TCP) to Tor DNSPort
-iptables -t nat -A OUTPUT -p udp --dport 53 -j REDIRECT --to-ports 53
-iptables -t nat -A OUTPUT -p tcp --dport 53 -j REDIRECT --to-ports 53
+# Redirect DNS (UDP & TCP) to Tor DNSPort (dns_port placeholder)
+iptables -t nat -A OUTPUT -p udp --dport 53 -j REDIRECT --to-ports {dns_port}
+iptables -t nat -A OUTPUT -p tcp --dport 53 -j REDIRECT --to-ports {dns_port}
 
 # Redirect outgoing TCP connections to Tor TransPort
 iptables -t nat -A OUTPUT -p tcp --syn -j REDIRECT --to-ports 9040
@@ -426,18 +449,31 @@ def start_torghost():
     except Exception as e:
         warn(f"Could not check/stop systemd-resolved: {e}")
 
-    # Ensure Tor's DNSPort is listening before writing resolv.conf.
+    # default DNS port we will direct to (may fallback to 5353)
+    dns_port = 53
+
     info("Waiting for Tor DNSPort (127.0.0.1:53) to be available (timeout 15s)...")
     if not wait_for_port('127.0.0.1', 53, timeout=15):
-        warn("Tor DNSPort 53 not reachable. Attempting to restart tor and retry...")
-        try:
-            subprocess.run(['systemctl', 'restart', 'tor'], check=False)
-        except Exception:
-            pass
-        # retry wait
-        if not wait_for_port('127.0.0.1', 53, timeout=15):
-            # Abort to avoid replacing resolv.conf with a non-working resolver
-            error("Tor DNSPort not listening after restart — aborting start to avoid breaking DNS.", fatal=True)
+        warn("Tor DNSPort 53 not reachable. Attempting fallback to DNSPort 5353...")
+        # Attempt to reconfigure tor to use 5353
+        if set_tor_dnsport(5353):
+            try:
+                subprocess.run(['systemctl', 'restart', 'tor'], check=False)
+            except Exception:
+                pass
+            # Wait for control and bootstrap again after restart
+            if not wait_for_port('127.0.0.1', 9051, timeout=30):
+                error("Tor control port did not come back after restart. Aborting.", fatal=True)
+            if not wait_for_bootstrap(timeout=60):
+                error("Tor did not finish bootstrapping after restart. Aborting.", fatal=True)
+            # now check for DNSPort 5353
+            if wait_for_port('127.0.0.1', 5353, timeout=15):
+                dns_port = 5353
+                success("Tor DNSPort 5353 is reachable; using fallback DNS port.")
+            else:
+                error("Tor DNSPort not listening after fallback restart — aborting start to avoid breaking DNS.", fatal=True)
+        else:
+            error("Could not update torrc for fallback DNSPort — aborting.", fatal=True)
 
     info("Preparing DNS configuration (resolv.conf) — backing up and pointing to Tor DNSPort...")
     try:
@@ -484,7 +520,7 @@ def start_torghost():
     # - Exempt the tor user's traffic to avoid loops.
     # - Redirect UDP/TCP port 53 (DNS) to Tor DNSPort and redirect TCP SYN to TransPort.
     # - In filter table accept established/related, tor user, and local networks, then REJECT all else.
-    iptables_script = IPTABLESSCRIPT.format(tor_uid=tor_uid)
+    iptables_script = IPTABLESSCRIPT.format(tor_uid=tor_uid, dns_port=dns_port)
 
     # --- Apply iptables rules ---------------------------------------------
     info("Applying IPv4 iptables rules to route traffic through Tor...")
