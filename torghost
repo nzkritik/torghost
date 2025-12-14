@@ -993,16 +993,20 @@ elif command == "switch":
 elif command == "status":
     logo()
     show_status()
-elif command == "check-leak":
-    # Continuous leak monitoring mode
-    # Optional: accept second CLI argument as interval in seconds
-    logo()
-    interval = 10
-    if len(sys.argv) >= 3:
-        try:
-            interval = int(sys.argv[2])
-        except Exception:
-            warn("Invalid interval; using default 10s.")
-    monitor_leaks(interval=interval)
+elif command in ("check-leak", "checkleak", "diag", "diagnose"):
+    # Continuous leak monitoring mode or diagnostics
+    # If user requested 'diag' run diagnostics, otherwise run monitor
+    if command in ("diag", "diagnose"):
+        logo()
+        diagnose_dns()
+    else:
+        logo()
+        interval = 10
+        if len(sys.argv) >= 3:
+            try:
+                interval = int(sys.argv[2])
+            except Exception:
+                warn("Invalid interval; using default 10s.")
+        monitor_leaks(interval=interval)
 else:
     usage()
