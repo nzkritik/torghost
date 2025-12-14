@@ -13,7 +13,7 @@ Clone the repo or download the files, open the directory and follow the commands
 	./install.sh
 
 -----------------------------------------------------------------------------------------
-
+```
 ▄▄▄▄▄▄▄▄▄           ▄▄▄▄▄▄▄  ▄▄                      
 ▀▀▀███▀▀▀          ███▀▀▀▀▀  ██                 ██   
    ███ ▄███▄ ████▄ ███       ████▄ ▄███▄ ▄█▀▀▀ ▀██▀▀ 
@@ -31,7 +31,7 @@ Clone the repo or download the files, open the directory and follow the commands
         torghost status       (show status)
         sudo torghost check-leak [interval_seconds]
             (run continuous DNS leak monitoring; default interval 10s)
-
+```
 -----------------------------------------------------------------------------------------
 
 ## REQUIREMENTS
