@@ -372,204 +372,204 @@ iptables -A OUTPUT -j REJECT
 
 # New helper: detect existing NAT redirect rules that could conflict / cause loops
 def detect_nat_conflicts():
-	"""
-	Inspect nat OUTPUT rules for existing REDIRECT entries.
-	If any REDIRECT to port 9040 or to port 53 already exists, warn and return True.
-	This avoids silently applying rules that can cause TransPort/NAT loops.
-	"""
-	try:
-		res = subprocess.run(['bash', '-c', 'iptables -t nat -L OUTPUT -n --line-numbers'], capture_output=True, text=True)
-		out = res.stdout or ''
-		# look for REDIRECT lines and target ports
-		for line in out.splitlines():
-			if 'REDIRECT' in line:
-				# crude parse: look for '--to-ports <port>' or 'ports'
-				if '--to-ports 9040' in line or '--to-ports 53' in line:
-					warn(f"Detected existing nat REDIRECT that targets Tor ports: {line.strip()}")
-					return True
-				# also if any REDIRECT exists it's suspicious
-				if 'REDIRECT' in line:
-					warn(f"Detected existing nat REDIRECT rule: {line.strip()}")
-					return True
-		return False
-	except Exception as e:
-		# If inspection fails, be conservative and report conflict to avoid breaking DNS
-		warn(f"Could not inspect existing nat OUTPUT rules: {e}")
-		return True
+    """
+    Inspect nat OUTPUT rules for existing REDIRECT entries.
+    If any REDIRECT to port 9040 or to port 53 already exists, warn and return True.
+    This avoids silently applying rules that can cause TransPort/NAT loops.
+    """
+    try:
+        res = subprocess.run(['bash', '-c', 'iptables -t nat -L OUTPUT -n --line-numbers'], capture_output=True, text=True)
+        out = res.stdout or ''
+        # look for REDIRECT lines and target ports
+        for line in out.splitlines():
+            if 'REDIRECT' in line:
+                # crude parse: look for '--to-ports <port>' or 'ports'
+                if '--to-ports 9040' in line or '--to-ports 53' in line:
+                    warn(f"Detected existing nat REDIRECT that targets Tor ports: {line.strip()}")
+                    return True
+                # also if any REDIRECT exists it's suspicious
+                if 'REDIRECT' in line:
+                    warn(f"Detected existing nat REDIRECT rule: {line.strip()}")
+                    return True
+        return False
+    except Exception as e:
+        # If inspection fails, be conservative and report conflict to avoid breaking DNS
+        warn(f"Could not inspect existing nat OUTPUT rules: {e}")
+        return True
 
 def stop_and_wait(service, timeout=10):
-	"""
-	Stop a systemd service and wait until it is not 'active'.
-	Returns True if the service is inactive within timeout, False otherwise.
-	Non-fatal: logs warnings on failure.
-	"""
-	try:
-		# Best-effort stop
-		subprocess.run(['systemctl', 'stop', service], check=False)
-		deadline = time.time() + timeout
-		while time.time() < deadline:
-			st = subprocess.run(['systemctl', 'is-active', service], capture_output=True, text=True).stdout.strip()
-			if st != 'active':
-				return True
-			time.sleep(0.5)
-		warn(f"Timed out waiting for {service} to stop.")
-		return False
-	except Exception as e:
-		warn(f"Failed to stop/wait for {service}: {e}")
-		return False
+    """
+    Stop a systemd service and wait until it is not 'active'.
+    Returns True if the service is inactive within timeout, False otherwise.
+    Non-fatal: logs warnings on failure.
+    """
+    try:
+        # Best-effort stop
+        subprocess.run(['systemctl', 'stop', service], check=False)
+        deadline = time.time() + timeout
+        while time.time() < deadline:
+            st = subprocess.run(['systemctl', 'is-active', service], capture_output=True, text=True).stdout.strip()
+            if st != 'active':
+                return True
+            time.sleep(0.5)
+        warn(f"Timed out waiting for {service} to stop.")
+        return False
+    except Exception as e:
+        warn(f"Failed to stop/wait for {service}: {e}")
+        return False
 
 # --- Cookie helper functions ------------------------------------------------
 def choose_cookie_path():
-	"""
-	Choose a sensible control cookie path for this system.
-	Prefer /run/tor if that runtime directory exists, otherwise fall back
-	to the persistent DataDirectory location under /var/lib/tor.
-	"""
-	if os.path.isdir('/run/tor'):
-		return '/run/tor/control.authcookie'
-	if os.path.isdir('/var/lib/tor'):
-		return '/var/lib/tor/control_auth_cookie'
-	# Fallback (best-effort)
-	return '/run/tor/control.authcookie'
+    """
+    Choose a sensible control cookie path for this system.
+    Prefer /run/tor if that runtime directory exists, otherwise fall back
+    to the persistent DataDirectory location under /var/lib/tor.
+    """
+    if os.path.isdir('/run/tor'):
+        return '/run/tor/control.authcookie'
+    if os.path.isdir('/var/lib/tor'):
+        return '/var/lib/tor/control_auth_cookie'
+    # Fallback (best-effort)
+    return '/run/tor/control.authcookie'
 
 def create_cookie_parent_dir(cookie_path):
-	"""
-	Ensure the parent directory of cookie_path exists with safe perms.
-	Attempts to chown the directory to the 'tor' user if present.
-	Non-fatal: logs warnings on failure.
-	"""
-	parent = os.path.dirname(cookie_path)
-	try:
-		if not os.path.exists(parent):
-			info(f"Creating cookie parent dir {parent}")
-			os.makedirs(parent, exist_ok=True)
-			try:
-				# best-effort chown to tor:tor
-				uid = int(subprocess.run(['id', '-u', 'tor'], capture_output=True, text=True).stdout.strip())
-				gid = int(subprocess.run(['id', '-g', 'tor'], capture_output=True, text=True).stdout.strip())
-				os.chown(parent, uid, gid)
-			except Exception:
-				# ignore if 'tor' user not present or chown fails
-				pass
-			try:
-				os.chmod(parent, 0o700)
-			except Exception:
-				pass
-		else:
-			info(f"Cookie parent dir exists: {parent}")
-	except Exception as e:
-		warn(f"Failed to create/prepare cookie parent directory {parent}: {e}")
+    """
+    Ensure the parent directory of cookie_path exists with safe perms.
+    Attempts to chown the directory to the 'tor' user if present.
+    Non-fatal: logs warnings on failure.
+    """
+    parent = os.path.dirname(cookie_path)
+    try:
+        if not os.path.exists(parent):
+            info(f"Creating cookie parent dir {parent}")
+            os.makedirs(parent, exist_ok=True)
+            try:
+                # best-effort chown to tor:tor
+                uid = int(subprocess.run(['id', '-u', 'tor'], capture_output=True, text=True).stdout.strip())
+                gid = int(subprocess.run(['id', '-g', 'tor'], capture_output=True, text=True).stdout.strip())
+                os.chown(parent, uid, gid)
+            except Exception:
+                # ignore if 'tor' user not present or chown fails
+                pass
+            try:
+                os.chmod(parent, 0o700)
+            except Exception:
+                pass
+        else:
+            info(f"Cookie parent dir exists: {parent}")
+    except Exception as e:
+        warn(f"Failed to create/prepare cookie parent directory {parent}: {e}")
 
 def ensure_cookie_auth_in_torrc():
-	"""
-	Ensure torrc contains CookieAuthentication and a usable CookieAuthFile.
-	Removes any existing CookieAuthentication/CookieAuthFile lines (including
-	commented variants) then appends a clean block. Returns the chosen cookie
-	path on success or None on failure.
-	"""
-	try:
-		with open(TORRC_PATH, 'r') as f:
-			data = f.read()
-	except Exception as e:
-		warn(f"Could not read {TORRC_PATH}: {e}")
-		return None
+    """
+    Ensure torrc contains CookieAuthentication and a usable CookieAuthFile.
+    Removes any existing CookieAuthentication/CookieAuthFile lines (including
+    commented variants) then appends a clean block. Returns the chosen cookie
+    path on success or None on failure.
+    """
+    try:
+        with open(TORRC_PATH, 'r') as f:
+            data = f.read()
+    except Exception as e:
+        warn(f"Could not read {TORRC_PATH}: {e}")
+        return None
 
-	cookie_path = choose_cookie_path()
+    cookie_path = choose_cookie_path()
 
-	# Strip any existing CookieAuthentication/CookieAuthFile lines (even commented)
-	lines = []
-	for line in data.splitlines():
-		if re.match(r'^\s*#?\s*CookieAuthentication\b', line):
-			continue
-		if re.match(r'^\s*#?\s*CookieAuthFile\b', line):
-			continue
-		lines.append(line)
-	clean = "\n".join(lines).rstrip() + "\n\n"
+    # Strip any existing CookieAuthentication/CookieAuthFile lines (even commented)
+    lines = []
+    for line in data.splitlines():
+        if re.match(r'^\s*#?\s*CookieAuthentication\b', line):
+            continue
+        if re.match(r'^\s*#?\s*CookieAuthFile\b', line):
+            continue
+        lines.append(line)
+    clean = "\n".join(lines).rstrip() + "\n\n"
 
-	# Append a clear block
-	block = (
-		"# TorGhost: enable cookie auth\n"
-		"CookieAuthentication 1\n"
-		f"CookieAuthFile {cookie_path}\n"
-	)
+    # Append a clear block
+    block = (
+        "# TorGhost: enable cookie auth\n"
+        "CookieAuthentication 1\n"
+        f"CookieAuthFile {cookie_path}\n"
+    )
 
-	new_data = clean + block
+    new_data = clean + block
 
-	# If identical, return chosen path
-	if new_data == data:
-		return cookie_path
+    # If identical, return chosen path
+    if new_data == data:
+        return cookie_path
 
-	# Backup and write
-	try:
-		backup = TORRC_PATH + f'.bak-torghost-{int(time.time())}'
-		shutil.copy(TORRC_PATH, backup)
-		with open(TORRC_PATH, 'w') as f:
-			f.write(new_data)
-		success(f"Updated {TORRC_PATH} to enable CookieAuthentication (backup: {backup}).")
-		return cookie_path
-	except Exception as e:
-		warn(f"Failed to update {TORRC_PATH}: {e}")
-		return None
+    # Backup and write
+    try:
+        backup = TORRC_PATH + f'.bak-torghost-{int(time.time())}'
+        shutil.copy(TORRC_PATH, backup)
+        with open(TORRC_PATH, 'w') as f:
+            f.write(new_data)
+        success(f"Updated {TORRC_PATH} to enable CookieAuthentication (backup: {backup}).")
+        return cookie_path
+    except Exception as e:
+        warn(f"Failed to update {TORRC_PATH}: {e}")
+        return None
 
 def get_cookie_candidates():
-	"""
-	Return an ordered list of paths to check for Tor control auth cookie.
-	Prefer an explicit CookieAuthFile in torrc, then common runtime paths.
-	"""
-	candidates = []
-	# If torrc contains CookieAuthFile, prefer that
-	try:
-		with open(TORRC_PATH, 'r') as f:
-			for line in f:
-				m = re.match(r'^\s*CookieAuthFile\s+(.+)$', line)
-				if m:
-					path = m.group(1).strip().strip('"').strip("'")
-					candidates.append(path)
-					break
-	except Exception:
-		pass
+    """
+    Return an ordered list of paths to check for Tor control auth cookie.
+    Prefer an explicit CookieAuthFile in torrc, then common runtime paths.
+    """
+    candidates = []
+    # If torrc contains CookieAuthFile, prefer that
+    try:
+        with open(TORRC_PATH, 'r') as f:
+            for line in f:
+                m = re.match(r'^\s*CookieAuthFile\s+(.+)$', line)
+                if m:
+                    path = m.group(1).strip().strip('"').strip("'")
+                    candidates.append(path)
+                    break
+    except Exception:
+        pass
 
-	# Common locations
-	common = [
-		'/run/tor/control.authcookie',
-		'/run/tor/control_auth_cookie',
-		'/var/run/tor/control.authcookie',
-		'/var/lib/tor/control_auth_cookie',
-		'/var/lib/tor/control.authcookie'
-	]
-	for p in common:
-		if p not in candidates:
-			candidates.append(p)
-	return candidates
+    # Common locations
+    common = [
+        '/run/tor/control.authcookie',
+        '/run/tor/control_auth_cookie',
+        '/var/run/tor/control.authcookie',
+        '/var/lib/tor/control_auth_cookie',
+        '/var/lib/tor/control.authcookie'
+    ]
+    for p in common:
+        if p not in candidates:
+            candidates.append(p)
+    return candidates
 
 def wait_for_cookie(candidates=None, timeout=60):
-	"""
-	Wait for any auth cookie in `candidates` to appear.
-	Returns the path found or None on timeout. Ensures restrictive perms where possible.
-	"""
-	if candidates is None:
-		candidates = get_cookie_candidates()
-	deadline = time.time() + timeout
-	while time.time() < deadline:
-		for path in candidates:
-			try:
-				if os.path.exists(path):
-					# best-effort secure perms
-					try:
-						os.chown(path, 0, 0)
-					except Exception:
-						pass
-					try:
-						os.chmod(path, 0o600)
-					except Exception:
-						pass
-					info(f"Found Tor control auth cookie: {path}")
-					return path
-			except Exception:
-				pass
-		time.sleep(1)
-	warn(f"Timeout waiting for Tor control auth cookie. Checked: {', '.join(candidates)}")
-	return None
+    """
+    Wait for any auth cookie in `candidates` to appear.
+    Returns the path found or None on timeout. Ensures restrictive perms where possible.
+    """
+    if candidates is None:
+        candidates = get_cookie_candidates()
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        for path in candidates:
+            try:
+                if os.path.exists(path):
+                    # best-effort secure perms
+                    try:
+                        os.chown(path, 0, 0)
+                    except Exception:
+                        pass
+                    try:
+                        os.chmod(path, 0o600)
+                    except Exception:
+                        pass
+                    info(f"Found Tor control auth cookie: {path}")
+                    return path
+            except Exception:
+                pass
+        time.sleep(1)
+    warn(f"Timeout waiting for Tor control auth cookie. Checked: {', '.join(candidates)}")
+    return None
 
 # --- Core operational functions ----------------------------------------------
 def start_torghost():
@@ -739,28 +739,28 @@ def start_torghost():
         # Be conservative: abort to avoid clobbering resolv.conf
         error("Unable to verify systemd-resolved state; aborting to avoid breaking system DNS.", fatal=True)
 
-	info("Preparing DNS configuration (resolv.conf) — backing up and pointing to Tor DNSPort...")
-	try:
-		# Now that DNSPort is confirmed and systemd-resolved stopped, safely replace resolv.conf.
-		if os.path.islink(resolv):
-			orig_target = os.readlink(resolv)
-			info(f"/etc/resolv.conf is a symlink to {orig_target}; recording and replacing with a plain file.")
-			with open(resolv_backup_link, 'w') as f:
-				f.write(orig_target)
-			os.remove(resolv)
-		else:
-			if not os.path.exists(resolv_backup):
-				shutil.copy(resolv, resolv_backup)
-				info(f"Backed up /etc/resolv.conf to {resolv_backup}")
-			else:
-				info("Existing resolv.conf backup found; will not overwrite.")
+    info("Preparing DNS configuration (resolv.conf) — backing up and pointing to Tor DNSPort...")
+    try:
+        # Now that DNSPort is confirmed and systemd-resolved stopped, safely replace resolv.conf.
+        if os.path.islink(resolv):
+            orig_target = os.readlink(resolv)
+            info(f"/etc/resolv.conf is a symlink to {orig_target}; recording and replacing with a plain file.")
+            with open(resolv_backup_link, 'w') as f:
+                f.write(orig_target)
+            os.remove(resolv)
+        else:
+            if not os.path.exists(resolv_backup):
+                shutil.copy(resolv, resolv_backup)
+                info(f"Backed up /etc/resolv.conf to {resolv_backup}")
+            else:
+                info("Existing resolv.conf backup found; will not overwrite.")
 
-		# Write a plain resolv.conf pointing to the local Tor DNSPort (127.0.0.1)
-		with open(resolv, 'w') as f:
-			f.write("nameserver 127.0.0.1\n")
-		success("Wrote /etc/resolv.conf -> nameserver 127.0.0.1")
-	except IOError as e:
-		error(f"Error configuring DNS: {e}", fatal=True)
+        # Write a plain resolv.conf pointing to the local Tor DNSPort (127.0.0.1)
+        with open(resolv, 'w') as f:
+            f.write("nameserver 127.0.0.1\n")
+        success("Wrote /etc/resolv.conf -> nameserver 127.0.0.1")
+    except IOError as e:
+        error(f"Error configuring DNS: {e}", fatal=True)
 
     # --- Determine Tor user's UID -----------------------------------------
     info("Determining 'tor' user UID for firewall exemptions...")
@@ -1023,69 +1023,69 @@ def show_status():
 
 
 def tighten_dns_rules(tor_uid):
-	"""
-	Add extra filter rules to prevent any non-tor user from sending DNS (UDP/TCP 53)
-	directly to the network. These are defense-in-depth: the nat redirect should
-	catch DNS, but this prevents escapes (and helps detect misbehavior).
-	"""
-	info("Installing additional DNS hardening rules (filter table)...")
-	try:
-		# UDP 53: reject packets from processes not running as tor (IPv4)
-		subprocess.run(['bash', '-c',
-			f'iptables -C OUTPUT -p udp --dport 53 -m owner ! --uid-owner {tor_uid} -j REJECT >/dev/null 2>&1 || '
-			f'iptables -I OUTPUT 1 -p udp --dport 53 -m owner ! --uid-owner {tor_uid} -j REJECT'
-		], check=False)
-		# TCP 53: same for TCP DNS (IPv4)
-		subprocess.run(['bash', '-c',
-			f'iptables -C OUTPUT -p tcp --dport 53 -m owner ! --uid-owner {tor_uid} -j REJECT >/dev/null 2>&1 || '
-			f'iptables -I OUTPUT 1 -p tcp --dport 53 -m owner ! --uid-owner {tor_uid} -j REJECT'
-		], check=False)
+    """
+    Add extra filter rules to prevent any non-tor user from sending DNS (UDP/TCP 53)
+    directly to the network. These are defense-in-depth: the nat redirect should
+    catch DNS, but this prevents escapes (and helps detect misbehavior).
+    """
+    info("Installing additional DNS hardening rules (filter table)...")
+    try:
+        # UDP 53: reject packets from processes not running as tor (IPv4)
+        subprocess.run(['bash', '-c',
+            f'iptables -C OUTPUT -p udp --dport 53 -m owner ! --uid-owner {tor_uid} -j REJECT >/dev/null 2>&1 || '
+            f'iptables -I OUTPUT 1 -p udp --dport 53 -m owner ! --uid-owner {tor_uid} -j REJECT'
+        ], check=False)
+        # TCP 53: same for TCP DNS (IPv4)
+        subprocess.run(['bash', '-c',
+            f'iptables -C OUTPUT -p tcp --dport 53 -m owner ! --uid-owner {tor_uid} -j REJECT >/dev/null 2>&1 || '
+            f'iptables -I OUTPUT 1 -p tcp --dport 53 -m owner ! --uid-owner {tor_uid} -j REJECT'
+        ], check=False)
 
-		# IPv6 DNS hardening: reject non-tor user IPv6 DNS (UDP & TCP 53)
-		subprocess.run(['bash', '-c',
-			f'ip6tables -C OUTPUT -p udp --dport 53 -m owner ! --uid-owner {tor_uid} -j REJECT >/dev/null 2>&1 || '
-			f'ip6tables -I OUTPUT 1 -p udp --dport 53 -m owner ! --uid-owner {tor_uid} -j REJECT'
-		], check=False)
-		subprocess.run(['bash', '-c',
-			f'ip6tables -C OUTPUT -p tcp --dport 53 -m owner ! --uid-owner {tor_uid} -j REJECT >/dev/null 2>&1 || '
-			f'ip6tables -I OUTPUT 1 -p tcp --dport 53 -m owner ! --uid-owner {tor_uid} -j REJECT'
-		], check=False)
+        # IPv6 DNS hardening: reject non-tor user IPv6 DNS (UDP & TCP 53)
+        subprocess.run(['bash', '-c',
+            f'ip6tables -C OUTPUT -p udp --dport 53 -m owner ! --uid-owner {tor_uid} -j REJECT >/dev/null 2>&1 || '
+            f'ip6tables -I OUTPUT 1 -p udp --dport 53 -m owner ! --uid-owner {tor_uid} -j REJECT'
+        ], check=False)
+        subprocess.run(['bash', '-c',
+            f'ip6tables -C OUTPUT -p tcp --dport 53 -m owner ! --uid-owner {tor_uid} -j REJECT >/dev/null 2>&1 || '
+            f'ip6tables -I OUTPUT 1 -p tcp --dport 53 -m owner ! --uid-owner {tor_uid} -j REJECT'
+        ], check=False)
 
-		success("DNS hardening rules installed (IPv4 & IPv6).")
-	except Exception as e:
-		warn(f"Failed to install DNS hardening rules: {e}")
+        success("DNS hardening rules installed (IPv4 & IPv6).")
+    except Exception as e:
+        warn(f"Failed to install DNS hardening rules: {e}")
 
 # New: apply strict IPv6 block (allow loopback/local/tor user only)
 def apply_ipv6_block(tor_uid):
-	"""
-	Install ip6tables rules to block all outbound IPv6 traffic except:
-	- loopback (::1)
-	- link-local fe80::/10
-	- unique-local fc00::/7
-	- multicast ff00::/8
-	- traffic from the tor user (avoid loops)
-	"""
-	info("Applying strict IPv6 outbound block (ip6tables)...")
-	try:
-		# flush and set default DROP for OUTPUT, but allow critical exceptions
-		commands = [
-			"ip6tables -F",
-			"ip6tables -t raw -F || true",
-			"ip6tables -P OUTPUT DROP",
-			"ip6tables -A OUTPUT -o lo -j ACCEPT",
-			f"ip6tables -A OUTPUT -m owner --uid-owner {tor_uid} -j ACCEPT",
-			"ip6tables -A OUTPUT -d ::1/128 -j ACCEPT",
-			"ip6tables -A OUTPUT -d fe80::/10 -j ACCEPT",
-			"ip6tables -A OUTPUT -d fc00::/7 -j ACCEPT",
-			"ip6tables -A OUTPUT -d ff00::/8 -j ACCEPT",
-			# allow neighbor discovery to link-local if needed
-			"ip6tables -A OUTPUT -p icmpv6 -j ACCEPT"
-		]
-		for cmd in commands:
-			subprocess.run(['bash', '-c', cmd], check=False, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-		success("IPv6 blocking rules applied.")
-	except Exception as e:
-		warn(f"Failed to apply IPv6 block rules: {e}")
+    """
+    Install ip6tables rules to block all outbound IPv6 traffic except:
+    - loopback (::1)
+    - link-local fe80::/10
+    - unique-local fc00::/7
+    - multicast ff00::/8
+    - traffic from the tor user (avoid loops)
+    """
+    info("Applying strict IPv6 outbound block (ip6tables)...")
+    try:
+        # flush and set default DROP for OUTPUT, but allow critical exceptions
+        commands = [
+            "ip6tables -F",
+            "ip6tables -t raw -F || true",
+            "ip6tables -P OUTPUT DROP",
+            "ip6tables -A OUTPUT -o lo -j ACCEPT",
+            f"ip6tables -A OUTPUT -m owner --uid-owner {tor_uid} -j ACCEPT",
+            "ip6tables -A OUTPUT -d ::1/128 -j ACCEPT",
+            "ip6tables -A OUTPUT -d fe80::/10 -j ACCEPT",
+            "ip6tables -A OUTPUT -d fc00::/7 -j ACCEPT",
+            "ip6tables -A OUTPUT -d ff00::/8 -j ACCEPT",
+            # allow neighbor discovery to link-local if needed
+            "ip6tables -A OUTPUT -p icmpv6 -j ACCEPT"
+        ]
+        for cmd in commands:
+            subprocess.run(['bash', '-c', cmd], check=False, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        success("IPv6 blocking rules applied.")
+    except Exception as e:
+        warn(f"Failed to apply IPv6 block rules: {e}")
 
 def diagnose_dns():
     """
@@ -1204,101 +1204,101 @@ def diagnose_dns():
 
 
 def dns_leak_check(duration=6):
-	"""
-	Quick DNS leak detection:
-	- If tcpdump is available, run it for `duration` seconds and look for
-	  any UDP/53 packets not to/from 127.0.0.1 (IPv4) or ::1 (IPv6).
-	- If tcpdump is not available, examine iptables nat OUTPUT counters as a hint.
-	Returns True if a leak was observed, False otherwise.
-	"""
-	info("Starting DNS leak check...")
-	tcpdump_path = shutil.which('tcpdump')
-	if tcpdump_path:
-		info(f"Using tcpdump to monitor DNS on all interfaces for {duration} seconds...")
-		try:
-			# check IPv4 DNS leaks
-			cmd_v4 = ['timeout', str(duration), 'tcpdump', '-n', '-i', 'any', 'udp', 'port', '53', 'and', 'not', 'host', '127.0.0.1', '-c', '1']
-			proc_v4 = subprocess.run(cmd_v4, capture_output=True, text=True)
-			out_v4 = proc_v4.stdout.strip() + proc_v4.stderr.strip()
-			if proc_v4.returncode == 0 and out_v4:
-				warn("DNS leak detected (IPv4): observed UDP/53 traffic to non-local addresses:")
-				print(out_v4)
-				return True
-			# check IPv6 DNS leaks
-			cmd_v6 = ['timeout', str(duration), 'tcpdump', '-n', '-i', 'any', 'ip6', 'and', 'udp', 'port', '53', 'and', 'not', 'host', '::1', '-c', '1']
-			proc_v6 = subprocess.run(cmd_v6, capture_output=True, text=True)
-			out_v6 = proc_v6.stdout.strip() + proc_v6.stderr.strip()
-			if proc_v6.returncode == 0 and out_v6:
-				warn("DNS leak detected (IPv6): observed UDP/53 traffic to non-local IPv6 addresses:")
-				print(out_v6)
-				return True
-			success("No non-local DNS packets observed during capture windows.")
-			return False
-		except Exception as e:
-			warn(f"tcpdump monitoring failed: {e}")
-			return False
-	else:
-		info("tcpdump not found. Checking iptables nat OUTPUT counters as a heuristic...")
-		try:
-			nat = subprocess.run(['bash', '-c', 'iptables -t nat -L OUTPUT -v -n'], capture_output=True, text=True)
-			print(nat.stdout)
-			info("If nat OUTPUT shows zero hits for the DNS redirect rule, DNS may not be redirected.")
-			# also show ip6tables OUTPUT rules as heuristic
-			ip6 = subprocess.run(['bash', '-c', 'ip6tables -L OUTPUT -v -n'], capture_output=True, text=True)
-			print(ip6.stdout)
-			return False
-		except Exception as e:
-			warn(f"Failed to inspect iptables: {e}")
-			return False
+    """
+    Quick DNS leak detection:
+    - If tcpdump is available, run it for `duration` seconds and look for
+      any UDP/53 packets not to/from 127.0.0.1 (IPv4) or ::1 (IPv6).
+    - If tcpdump is not available, examine iptables nat OUTPUT counters as a hint.
+    Returns True if a leak was observed, False otherwise.
+    """
+    info("Starting DNS leak check...")
+    tcpdump_path = shutil.which('tcpdump')
+    if tcpdump_path:
+        info(f"Using tcpdump to monitor DNS on all interfaces for {duration} seconds...")
+        try:
+            # check IPv4 DNS leaks
+            cmd_v4 = ['timeout', str(duration), 'tcpdump', '-n', '-i', 'any', 'udp', 'port', '53', 'and', 'not', 'host', '127.0.0.1', '-c', '1']
+            proc_v4 = subprocess.run(cmd_v4, capture_output=True, text=True)
+            out_v4 = proc_v4.stdout.strip() + proc_v4.stderr.strip()
+            if proc_v4.returncode == 0 and out_v4:
+                warn("DNS leak detected (IPv4): observed UDP/53 traffic to non-local addresses:")
+                print(out_v4)
+                return True
+            # check IPv6 DNS leaks
+            cmd_v6 = ['timeout', str(duration), 'tcpdump', '-n', '-i', 'any', 'ip6', 'and', 'udp', 'port', '53', 'and', 'not', 'host', '::1', '-c', '1']
+            proc_v6 = subprocess.run(cmd_v6, capture_output=True, text=True)
+            out_v6 = proc_v6.stdout.strip() + proc_v6.stderr.strip()
+            if proc_v6.returncode == 0 and out_v6:
+                warn("DNS leak detected (IPv6): observed UDP/53 traffic to non-local IPv6 addresses:")
+                print(out_v6)
+                return True
+            success("No non-local DNS packets observed during capture windows.")
+            return False
+        except Exception as e:
+            warn(f"tcpdump monitoring failed: {e}")
+            return False
+    else:
+        info("tcpdump not found. Checking iptables nat OUTPUT counters as a heuristic...")
+        try:
+            nat = subprocess.run(['bash', '-c', 'iptables -t nat -L OUTPUT -v -n'], capture_output=True, text=True)
+            print(nat.stdout)
+            info("If nat OUTPUT shows zero hits for the DNS redirect rule, DNS may not be redirected.")
+            # also show ip6tables OUTPUT rules as heuristic
+            ip6 = subprocess.run(['bash', '-c', 'ip6tables -L OUTPUT -v -n'], capture_output=True, text=True)
+            print(ip6.stdout)
+            return False
+        except Exception as e:
+            warn(f"Failed to inspect iptables: {e}")
+            return False
 
 # New: continuous monitor mode for leak checking
 def monitor_leaks(interval=10):
-	"""
-	Continuously run dns_leak_check() every `interval` seconds.
-	User may type 'q' + Enter to quit, or press Ctrl-C.
-	"""
-	info(f"Entering continuous leak-monitor mode (interval {interval}s).")
-	info("Press 'q' then Enter to quit, or Ctrl-C to exit.")
-	stop_event = threading.Event()
+    """
+    Continuously run dns_leak_check() every `interval` seconds.
+    User may type 'q' + Enter to quit, or press Ctrl-C.
+    """
+    info(f"Entering continuous leak-monitor mode (interval {interval}s).")
+    info("Press 'q' then Enter to quit, or Ctrl-C to exit.")
+    stop_event = threading.Event()
 
-	def input_watcher():
-		# Blocking read on stdin in a thread; sets stop_event when 'q' received.
-		try:
-			while not stop_event.is_set():
-				line = sys.stdin.readline()
-				if not line:
-					# EOF or no input; small sleep to avoid busy loop
-					time.sleep(0.1)
-					continue
-				if line.strip().lower() == 'q':
-					stop_event.set()
-					break
-		except Exception:
-			stop_event.set()
+    def input_watcher():
+        # Blocking read on stdin in a thread; sets stop_event when 'q' received.
+        try:
+            while not stop_event.is_set():
+                line = sys.stdin.readline()
+                if not line:
+                    # EOF or no input; small sleep to avoid busy loop
+                    time.sleep(0.1)
+                    continue
+                if line.strip().lower() == 'q':
+                    stop_event.set()
+                    break
+        except Exception:
+            stop_event.set()
 
-	watcher = threading.Thread(target=input_watcher, daemon=True)
-	watcher.start()
+    watcher = threading.Thread(target=input_watcher, daemon=True)
+    watcher.start()
 
-	try:
-		while not stop_event.is_set():
-			leak = dns_leak_check(duration=6)
-			if leak:
-				warn("Leak detected during monitoring cycle.")
-			else:
-				success("No leak detected in this cycle.")
-			# wait interval seconds but exit early if stop_event set
-			for _ in range(int(interval)):
-				if stop_event.is_set():
-					break
-				time.sleep(1)
-	except KeyboardInterrupt:
-		info("Interrupted by user (Ctrl-C). Exiting monitor.")
-		stop_event.set()
+    try:
+        while not stop_event.is_set():
+            leak = dns_leak_check(duration=6)
+            if leak:
+                warn("Leak detected during monitoring cycle.")
+            else:
+                success("No leak detected in this cycle.")
+            # wait interval seconds but exit early if stop_event set
+            for _ in range(int(interval)):
+                if stop_event.is_set():
+                    break
+                time.sleep(1)
+    except KeyboardInterrupt:
+        info("Interrupted by user (Ctrl-C). Exiting monitor.")
+        stop_event.set()
 
-	# Ensure watcher thread will finish
-	stop_event.set()
-	watcher.join(timeout=1)
-	info("Leak monitor stopped. Returning to shell.")
+    # Ensure watcher thread will finish
+    stop_event.set()
+    watcher.join(timeout=1)
+    info("Leak monitor stopped. Returning to shell.")
 
 # New helper: wait for Tor bootstrap to complete
 def wait_for_bootstrap(timeout=120, poll_interval=2):
