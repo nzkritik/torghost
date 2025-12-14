@@ -47,12 +47,39 @@ except Exception:
 # bcolors provides a small, local set of escape sequences to color terminal
 # output. Used to make status and error messages easier to spot.
 class bcolors:
-    BLUE = '\033[94m'
-    GREEN = '\033[92m'
-    RED = '\033[31m'
-    YELLOW = '\033[93m'
-    ENDC = '\033[0m'
-    BOLD = '\033[1m'
+	BLUE = '\033[94m'
+	GREEN = '\033[92m'
+	RED = '\033[31m'
+	YELLOW = '\033[93m'
+	ENDC = '\033[0m'
+	BOLD = '\033[1m'
+
+# --- Development warning banner (shown on every run) -----------------------
+DEV_WARNING = r"""
+!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+!!                              DEVELOPMENT WARNING                            !!
+!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+!!  THIS SCRIPT IS UNDER ACTIVE DEVELOPMENT AND TESTING.                       !!
+!!                                                                              !!
+!!  It may change system networking, modify /etc/resolv.conf, and alter your   !!
+!!  iptables/ip6tables rules. Running it on a production or important system  !!
+!!  can break networking, prevent access, or require manual recovery.          !!
+!!                                                                              !!
+!!  DO NOT RUN THIS ON A MACHINE YOU CARE ABOUT. Use a disposable VM or       !!
+!!  snapshot before running.                                                   !!
+!!                                                                              !!
+!!  If you still want to proceed: review the code thoroughly and run in a      !!
+!!  controlled/test environment.                                                !!
+!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+"""
+
+def print_dev_warning():
+	"""Print the development warning banner to the terminal."""
+	try:
+		print(f"{bcolors.RED}{bcolors.BOLD}{DEV_WARNING}{bcolors.ENDC}")
+	except Exception:
+		# fallback plain output if coloring fails
+		print(DEV_WARNING)
 
 # User feedback helper functions (timestamped, colored)
 def info(msg):
