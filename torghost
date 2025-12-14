@@ -406,9 +406,9 @@ def create_cookie_parent_dir(cookie_path):
 def ensure_cookie_auth_in_torrc():
 	"""
 	Ensure torrc contains CookieAuthentication and a usable CookieAuthFile.
-	Chooses the cookie path with choose_cookie_path() and writes/updates
-	the torrc idempotently. Returns the chosen cookie path on success, or
-	None on failure.
+	Idempotent and robust: remove any existing (even commented) CookieAuthentication
+	and CookieAuthFile lines, then append a clean block. Returns the chosen
+	cookie path on success, or None on failure.
 	"""
 	try:
 		with open(TORRC_PATH, 'r') as f:
@@ -418,36 +418,42 @@ def ensure_cookie_auth_in_torrc():
 		return None
 
 	cookie_path = choose_cookie_path()
-	changed = False
 
-	# Ensure CookieAuthentication is enabled
-	if not re.search(r'^\s*CookieAuthentication\s+\d+', data, flags=re.M):
-		data = data.rstrip() + "\n# TorGhost: enable cookie auth\nCookieAuthentication 1\n"
-		changed = True
+	# Remove any existing CookieAuthentication / CookieAuthFile (including commented)
+	# so we can re-insert a clean block without accidental concatenation.
+	lines = []
+	for line in data.splitlines():
+		if re.match(r'^\s*#?\s*CookieAuthentication\b', line):
+			continue
+		if re.match(r'^\s*#?\s*CookieAuthFile\b', line):
+			continue
+		lines.append(line)
+	clean = "\n".join(lines).rstrip() + "\n\n"
 
-	# Replace existing CookieAuthFile if present, otherwise append chosen path
-	if re.search(r'^\s*CookieAuthFile\s+.+$', data, flags=re.M):
-		new = re.sub(r'^\s*CookieAuthFile\s+.+$', f'CookieAuthFile {cookie_path}', data, flags=re.M)
-		if new != data:
-			data = new
-			changed = True
-	else:
-		data = data.rstrip() + f"CookieAuthFile {cookie_path}\n"
-		changed = True
+	# Append a clear block with proper newlines
+	block = (
+		"# TorGhost: enable cookie auth\n"
+		"CookieAuthentication 1\n"
+		f"CookieAuthFile {cookie_path}\n"
+	)
 
-	if changed:
-		try:
-			# create a timestamped backup to avoid clobbering earlier backups
-			backup = TORRC_PATH + f'.bak-torghost-{int(time.time())}'
-			shutil.copy(TORRC_PATH, backup)
-			with open(TORRC_PATH, 'w') as f:
-				f.write(data)
-			success(f"Updated {TORRC_PATH} to enable CookieAuthentication (backup: {backup}).")
-		except Exception as e:
-			warn(f"Failed to update {TORRC_PATH}: {e}")
-			return None
+	new_data = clean + block
 
-	return cookie_path
+	# If no change required, still return cookie_path
+	if new_data == data:
+		return cookie_path
+
+	# Backup and write
+	try:
+		backup = TORRC_PATH + f'.bak-torghost-{int(time.time())}'
+		shutil.copy(TORRC_PATH, backup)
+		with open(TORRC_PATH, 'w') as f:
+			f.write(new_data)
+		success(f"Updated {TORRC_PATH} to enable CookieAuthentication (backup: {backup}).")
+		return cookie_path
+	except Exception as e:
+		warn(f"Failed to update {TORRC_PATH}: {e}")
+		return None
 
 def get_cookie_candidates():
 	"""
