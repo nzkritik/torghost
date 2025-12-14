@@ -373,7 +373,7 @@ Nickname TorGhostNode
 VirtualAddrNetwork 10.192.0.0/10
 AutomapHostsOnResolve 1
 TransPort 127.0.0.1:9040
-DNSPort 127.0.0.1:53
+DNSPort 127.0.0.1:5353
 ControlPort 127.0.0.1:9051
 CookieAuthentication 1
 CookieAuthFile /run/tor/control.authcookie
@@ -439,24 +439,40 @@ iptables -A OUTPUT -j REJECT
 """
 
 def is_docker_active():
-    """Return True if Docker service is active."""
+    """Check if Docker service is active."""
+    if not shutil.which('systemctl'):
+        debug("systemctl not available, cannot check Docker status")
+        return False
+        
     try:
-        if not shutil.which('systemctl'):
-            return False
-        res = subprocess.run(['systemctl', 'is-active', 'docker'], 
-                           capture_output=True, text=True, timeout=5)
-        return res.stdout.strip() == 'active'
-    except Exception:
+        result = subprocess.run(['systemctl', 'is-active', 'docker'],
+                               capture_output=True, text=True, timeout=5)
+        return result.stdout.strip() == 'active'
+    except subprocess.TimeoutExpired:
+        warn("Timeout checking Docker status")
+        return False
+    except Exception as e:
+        debug(f"Error checking Docker status: {e}")
         return False
 
 def ensure_checkpoint_dir():
     """Ensure the checkpoint directory exists with proper permissions."""
+    checkpoint_dir = '/run/torghost'
     try:
-        os.makedirs('/run/torghost', exist_ok=True)
-        os.chmod('/run/torghost', 0o700)
-        info("Created checkpoint directory at /run/torghost")
+        if not os.path.exists(checkpoint_dir):
+            os.makedirs(checkpoint_dir, exist_ok=True)
+            os.chmod(checkpoint_dir, 0o700)
+            info(f"Created checkpoint directory at {checkpoint_dir}")
+        else:
+            # Verify permissions if directory exists
+            current_mode = os.stat(checkpoint_dir).st_mode & 0o777
+            if current_mode != 0o700:
+                os.chmod(checkpoint_dir, 0o700)
+                info(f"Updated permissions for existing checkpoint directory at {checkpoint_dir}")
+    except PermissionError:
+        error(f"Permission denied: Cannot create {checkpoint_dir}. Run as root.", fatal=True)
     except Exception as e:
-        warn(f"Could not create checkpoint directory: {e}")
+        warn(f"Could not create/setup checkpoint directory: {e}")
 
 def is_docker_active():
     """Check if Docker service is active."""
@@ -470,24 +486,41 @@ def is_docker_active():
 def set_tor_dnsport(port):
     """Force Tor to use a specific DNS port by modifying torrc."""
     try:
+        # Validate port number
+        port = int(port)
+        if port < 1 or port > 65535:
+            error(f"Invalid port number: {port}", fatal=True)
+        
         torrc_path = '/etc/tor/torrc'
         # Backup original if needed
-        if not os.path.exists(f"{torrc_path}.bak-original"):
-            shutil.copy(torrc_path, f"{torrc_path}.bak-original")
+        backup_path = f"{torrc_path}.bak-original"
+        if not os.path.exists(backup_path):
+            shutil.copy2(torrc_path, backup_path)  # copy2 preserves metadata
+        
+        # Get tor user permissions to restore later
+        tor_stat = os.stat(torrc_path)
+        tor_uid = tor_stat.st_uid
+        tor_gid = tor_stat.st_gid
+        
+        # Stop Tor service before modifying config
+        subprocess.run(['systemctl', 'stop', 'tor'], check=False)
         
         # Read current config
         with open(torrc_path, 'r') as f:
             lines = f.readlines()
         
-        # Remove existing DNSPort lines
-        new_lines = [line for line in lines if not line.startswith('DNSPort')]
+        # Remove existing DNSPort lines (including commented ones)
+        new_lines = [line for line in lines if not re.match(r'^\s*#?\s*DNSPort\b', line)]
         
         # Add our DNSPort setting
-        new_lines.append(f"DNSPort 127.0.0.1:{port}\n")
+        new_lines.append(f'DNSPort 127.0.0.1:{port}\n')
         
         # Write updated config
         with open(torrc_path, 'w') as f:
             f.writelines(new_lines)
+        
+        # Restore permissions
+        os.chown(torrc_path, tor_uid, tor_gid)
         
         success(f"Configured Tor to use DNSPort {port}")
         return True
