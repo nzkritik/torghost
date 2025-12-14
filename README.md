@@ -1,3 +1,12 @@
+# WARNING — DEVELOPMENT / DO NOT USE ON PRODUCTION SYSTEMS
+
+> IMPORTANT: This project is currently under active development and testing.
+> Running the torghost script can modify system network settings (iptables/nftables),
+> replace /etc/resolv.conf, stop system services (systemd-resolved, Docker), and
+> otherwise change system state. You should NOT run this on a production,
+> critical, or non-disposable machine. Use only in a disposable VM or on a snapshot
+> you can roll back. The authors are not responsible for damage or loss.
+
 # TorGhost
 This tool was originally for Kali Linux. It has now been converted to work with Arch Linux distros.   
 This is a powerful tool that can connect your whole PC with Tor network.   
