@@ -483,30 +483,29 @@ def start_torghost():
             info("Tor configuration marker already present; skipping append.")
     # ensure cookie auth lines are present (idempotent) and get chosen cookie path
         cookie_path = ensure_cookie_auth_in_torrc()
-		if not cookie_path:
-			error("Failed to ensure CookieAuthentication in torrc; aborting.", fatal=True)
-	except IOError as e:
-		error(f"Error modifying torrc: {e}", fatal=True)
+        if not cookie_path:
+            error("Failed to ensure CookieAuthentication in torrc; aborting.", fatal=True)
+    except IOError as e:
+        error(f"Error modifying torrc: {e}", fatal=True)
 
-	# Prepare the cookie parent dir (best-effort) so Tor can write the cookie
-	create_cookie_parent_dir(cookie_path)
-
-	# Stop systemd-resolved early so Tor can bind DNS ports reliably (record action)
-	try:
-		resolved_active = subprocess.run(['systemctl', 'is-active', 'systemd-resolved'],
-										 capture_output=True, text=True).stdout.strip() == 'active'
-		if resolved_active:
-			info("systemd-resolved is active — stopping it so Tor can bind DNSPort...")
-			subprocess.run(['systemctl', 'stop', 'systemd-resolved'], check=False)
-			try:
-				# record that we stopped it so stop_torghost can restart it
-				with open(RESOLVED_STOP_MARKER, 'w') as f:
-					f.write('stopped\n')
-			except Exception:
-				# marker write failure is non-fatal
-				pass
-	except Exception as e:
-		warn(f"Could not check/stop systemd-resolved: {e}")
+    # Prepare the cookie parent dir (best-effort) so Tor can write the cookie
+    create_cookie_parent_dir(cookie_path)
+    # Stop systemd-resolved early so Tor can bind DNS ports reliably (record action)
+    try:
+        resolved_active = subprocess.run(['systemctl', 'is-active', 'systemd-resolved'],
+                                         capture_output=True, text=True).stdout.strip() == 'active'
+        if resolved_active:
+            info("systemd-resolved is active — stopping it so Tor can bind DNSPort...")
+            subprocess.run(['systemctl', 'stop', 'systemd-resolved'], check=False)
+            try:
+                # record that we stopped it so stop_torghost can restart it
+                with open(RESOLVED_STOP_MARKER, 'w') as f:
+                    f.write('stopped\n')
+            except Exception:
+                # marker write failure is non-fatal
+                pass
+    except Exception as e:
+        warn(f"Could not check/stop systemd-resolved: {e}")
 
     # --- Start Tor service and wait for it to be ready --------------------
     info("Starting tor service (systemctl start tor)...")
