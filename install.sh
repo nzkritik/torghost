@@ -95,7 +95,7 @@ printf "\n"
 
 # Install dependencies for Arch Linux
 pretty_info "=====> Installing dependencies using pacman"
-sudo pacman -S --noconfirm tor python-stem curl
+sudo pacman -S --noconfirm tor python-stem curl tcpdump
 
 pretty_info "=====> Installing TorGhost"
 sudo cp torghost /usr/local/bin/torghost
