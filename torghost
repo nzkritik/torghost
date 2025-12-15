@@ -113,8 +113,7 @@ def sigint_handler(signum, frame):
     Signal handler for SIGINT (Ctrl-C). Ensures a polite shutdown message
     and exits cleanly by delegating to shutdown().
     """
-    print('
-User interrupt! Shutting down and restoring system state')
+    print('User interrupt! Shutting down and restoring system state')
     restore_system_state()
     sys.exit(0)
 def shutdown():
