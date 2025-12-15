@@ -4,7 +4,6 @@ TorGhost - Fixed Version for Arch Linux
 This script controls system-level configuration to route traffic through Tor.
 It must be run as root for actions that modify system services, networking,
 and firewall rules.
-
 KEY IMPROVEMENTS FROM ORIGINAL:
 - Fixed systemd-resolved conflicts with proper masking and symlink handling
 - Added comprehensive Tor bootstrap verification
@@ -26,7 +25,6 @@ import threading
 import re
 import json
 import logging
-
 # --- Third-party dependency check -------------------------------------------
 try:
     from stem import Signal
@@ -36,7 +34,6 @@ except Exception:
     print("On Arch: sudo pacman -S python-stem")
     print("Or with pip: pip install stem")
     sys.exit(1)
-
 # --- Terminal color helper class --------------------------------------------
 class bcolors:
     BLUE = '\033[94m'
@@ -45,7 +42,6 @@ class bcolors:
     YELLOW = '\033[93m'
     ENDC = '\033[0m'
     BOLD = '\033[1m'
-
 # --- Development warning banner (shown on every run) -----------------------
 DEV_WARNING = r"""
 !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
@@ -81,23 +77,19 @@ def print_dev_warning():
         print(DEV_WARNING)
         sys.stdout.flush()
         time.sleep(5)
-
 # User feedback helper functions (timestamped, colored)
 def info(msg):
     """Informational status message."""
     print(f"{t()} {bcolors.BLUE}{msg}{bcolors.ENDC}")
     logging.info(msg)
-
 def success(msg):
     """Success message."""
     print(f"{t()} {bcolors.GREEN}{msg}{bcolors.ENDC}")
     logging.info(msg)
-
 def warn(msg):
     """Non-fatal warning."""
     print(f"{t()} {bcolors.YELLOW}{msg}{bcolors.ENDC}")
     logging.warning(msg)
-
 def error(msg, fatal=False):
     """Error message; if fatal True, exit after printing."""
     print(f"{t()} {bcolors.RED}{msg}{bcolors.ENDC}")
@@ -109,7 +101,6 @@ def error(msg, fatal=False):
         except Exception as e:
             warn(f"Failed to restore system state during error handling: {e}")
         sys.exit(1)
-
 # --- Utility functions -------------------------------------------------------
 def t():
     """
@@ -117,24 +108,23 @@ def t():
     Example: [14:22:09]
     """
     return "[" + time.strftime('%H:%M:%S') + "]"
-
 def sigint_handler(signum, frame):
     """
     Signal handler for SIGINT (Ctrl-C). Ensures a polite shutdown message
     and exits cleanly by delegating to shutdown().
     """
-    print('\nUser interrupt! Shutting down and restoring system state')
+    print('
+User interrupt! Shutting down and restoring system state')
     restore_system_state()
     sys.exit(0)
-
 def shutdown():
     """
     Perform any necessary cleanup and exit the program.
     """
-    print(f"\n{t()} Shutting down torghost")
+    print(f"
+{t()} Shutting down torghost")
     restore_system_state()
     sys.exit(0)
-
 def logo():
     """
     Clear the terminal and print the ASCII banner + version info.
@@ -150,7 +140,6 @@ def logo():
     v3.1 - fixed version for Arch Linux
     """)
     print(f"{bcolors.ENDC}")
-
 def usage():
     """
     Print usage instructions and exit.
@@ -167,7 +156,6 @@ def usage():
         sudo torghost diag    (run diagnostics)
     """)
     sys.exit()
-
 def get_ip():
     """
     Query an external service to fetch the public IP.
@@ -179,10 +167,8 @@ def get_ip():
     if shutil.which('curl') is None:
         warn("curl not found — cannot query external IP (install curl to enable).")
         return "Unknown"
-    
     # If SocksPort is available use it first
     socks_first = wait_for_port('127.0.0.1', 9050, timeout=1)
-    
     def curl_request(args):
         try:
             res = subprocess.run(args, capture_output=True, text=True, timeout=15)
@@ -191,7 +177,6 @@ def get_ip():
         except Exception as e:
             warn(f"curl raised exception: {e}")
         return None
-    
     # Try via Tor SOCKS first if available
     if socks_first:
         for attempt in range(1, 4):
@@ -201,7 +186,6 @@ def get_ip():
                 success(f"External IP detected via Tor: {ip}")
                 return ip
             time.sleep(1)
-    
     # Fall back to direct connection
     for attempt in range(1, 3):
         info(f"Querying external IP (direct) attempt {attempt}/2...")
@@ -210,96 +194,8 @@ def get_ip():
             success(f"External IP detected (direct): {ip}")
             return ip
         time.sleep(1)
-    
     warn("Unable to determine external IP after multiple attempts")
     return "Unknown"
-
-def ensure_tor_runtime_dir():
-    """Create and secure the Tor runtime directory in /run"""
-    tor_runtime_dir = "/run/tor"
-    try:
-        if not os.path.exists(tor_runtime_dir):
-            os.makedirs(tor_runtime_dir, exist_ok=True)
-            # Get tor user UID/GID if available
-            try:
-                tor_uid = int(subprocess.run(['id', '-u', 'tor'], 
-                                           capture_output=True, text=True).stdout.strip())
-                tor_gid = int(subprocess.run(['id', '-g', 'tor'], 
-                                           capture_output=True, text=True).stdout.strip())
-                os.chown(tor_runtime_dir, tor_uid, tor_gid)
-            except Exception:
-                # Fall back to root ownership if tor user not found
-                os.chown(tor_runtime_dir, 0, 0)
-            os.chmod(tor_runtime_dir, 0o700)
-            info(f"Created Tor runtime directory: {tor_runtime_dir}")
-            return True
-        else:
-            info(f"Tor runtime directory already exists: {tor_runtime_dir}")
-            return True
-    except Exception as e:
-        error(f"Failed to create Tor runtime directory: {e}", fatal=True)
-
-def prepare_system_for_tor():
-    """Completely prepare the system for Tor by stopping interfering services."""
-    info("Preparing system for Tor by stopping interfering services...")
-    
-    # 1. Stop and mask systemd-resolved completely
-    try:
-        # Stop the service and its socket
-        subprocess.run(['systemctl', 'stop', 'systemd-resolved'], check=False)
-        subprocess.run(['systemctl', 'stop', 'systemd-resolved.socket'], check=False)
-        subprocess.run(['systemctl', 'mask', 'systemd-resolved'], check=False)
-        
-        # Verify it's not running
-        result = subprocess.run(['systemctl', 'is-active', 'systemd-resolved'], 
-                               capture_output=True, text=True)
-        if result.stdout.strip() == 'active':
-            warn("systemd-resolved is still active after stop attempt!")
-        
-        success("systemd-resolved stopped and masked")
-    except Exception as e:
-        warn(f"Error stopping systemd-resolved: {e}")
-    
-    # 2. Ensure resolv.conf is a regular file pointing to localhost
-    try:
-        # Remove symlink if it exists
-        if os.path.islink('/etc/resolv.conf'):
-            info("Removing systemd-resolved symlink at /etc/resolv.conf")
-            os.remove('/etc/resolv.conf')
-        
-        # Create a clean resolv.conf
-        with open('/etc/resolv.conf', 'w') as f:
-            f.write("nameserver 127.0.0.1\n")
-            f.write("options timeout:1\n")
-        
-        success("Created clean /etc/resolv.conf pointing to localhost")
-    except Exception as e:
-        error(f"Failed to create clean resolv.conf: {e}", fatal=True)
-    
-    # 3. Verify port 53 is free
-    info("Verifying port 53 is free...")
-    try:
-        result = subprocess.run(['ss', '-lun', '( sport = :domain )'], 
-                               capture_output=True, text=True)
-        if 'LISTEN' in result.stdout or 'UNCONN' in result.stdout:
-            warn("Port 53 appears to still be in use. Attempting to identify process:")
-            subprocess.run(['ss', '-lunp', '( sport = :domain )'])
-            
-            # Try to kill any remaining processes using port 53
-            subprocess.run(['pkill', '-f', 'systemd-resolved'], check=False)
-            time.sleep(2)
-        
-        # Final verification
-        result = subprocess.run(['ss', '-lun', '( sport = :domain )'], 
-                               capture_output=True, text=True)
-        if 'LISTEN' in result.stdout or 'UNCONN' in result.stdout:
-            error("Port 53 is still occupied after cleanup attempts. Please check manually with 'sudo ss -lunp \"sport = :domain\"'", fatal=True)
-        else:
-            success("Port 53 is now free")
-    except Exception as e:
-        warn(f"Error checking port 53 status: {e}")
-    
-    return True
 
 # Helper: wait for a TCP port to be reachable
 def wait_for_port(host, port, timeout=60, interval=1):
@@ -329,7 +225,6 @@ def disable_ipv6():
     info("Disabling IPv6 system-wide for duration of TorGhost...")
     keys = ['net.ipv6.conf.all.disable_ipv6', 'net.ipv6.conf.default.disable_ipv6']
     prev = {}
-    
     for key in keys:
         try:
             res = subprocess.run(['sysctl', '-n', key], capture_output=True, text=True)
@@ -340,23 +235,19 @@ def disable_ipv6():
         except Exception as e:
             prev[key] = '0'
             warn(f"Could not read {key}: {e}")
-    
     # Save previous values
     try:
         with open(IPV6_BACKUP_FILE, 'w') as f:
             json.dump(prev, f)
     except Exception as e:
         warn(f"Could not write IPv6 backup file: {e}")
-    
     # Disable ipv6
     for key in keys:
         try:
             subprocess.run(['sysctl', '-w', f'{key}=1'], check=True)
         except Exception as e:
             warn(f"Failed to set {key}=1: {e}")
-    
     success("IPv6 disabled (sysctl values set).")
-
 def restore_ipv6():
     """
     Restore IPv6 sysctl values from backup file.
@@ -364,17 +255,14 @@ def restore_ipv6():
     if not os.path.exists(IPV6_BACKUP_FILE):
         info("No IPv6 backup file found; skipping IPv6 restore.")
         return
-    
     try:
         with open(IPV6_BACKUP_FILE, 'r') as f:
             prev = json.load(f)
-        
         for key, val in prev.items():
             try:
                 subprocess.run(['sysctl', '-w', f'{key}={val}'], check=True)
             except Exception as e:
                 warn(f"Failed to restore {key}={val}: {e}")
-        
         os.remove(IPV6_BACKUP_FILE)
         success("IPv6 sysctl values restored from backup.")
     except Exception as e:
@@ -412,25 +300,20 @@ iptables -F
 iptables -t nat -F
 iptables -t mangle -F
 iptables -t raw -F
-
 # Print current state for diagnostics
 iptables -t nat -L OUTPUT -n --line-numbers
-
 # NAT rules
 # Prevent redirecting packets destined to local addresses
 iptables -t nat -I OUTPUT 1 -m addrtype --dst-type LOCAL -j RETURN || true
-
 # Exempt system and Tor user traffic
 iptables -t nat -I OUTPUT 2 -m owner --uid-owner 0 -j RETURN
 iptables -t nat -I OUTPUT 3 -m owner --uid-owner {tor_uid} -j RETURN
-
 # Prevent Tor's own traffic from being redirected to itself
 iptables -t nat -I OUTPUT 4 -p tcp --dport 9040 -j RETURN
 iptables -t nat -I OUTPUT 5 -p tcp --dport 9050 -j RETURN
 iptables -t nat -I OUTPUT 6 -p tcp --dport 9051 -j RETURN
 iptables -t nat -I OUTPUT 7 -p udp --dport 5353 -j RETURN
 iptables -t nat -I OUTPUT 8 -p udp --dport 53 -m owner --uid-owner {tor_uid} -j RETURN || true
-
 # Don't redirect traffic to private networks
 iptables -t nat -A OUTPUT -d 127.0.0.0/8 -j RETURN
 iptables -t nat -A OUTPUT -d 10.0.0.0/8 -j RETURN
@@ -439,17 +322,14 @@ iptables -t nat -A OUTPUT -d 192.168.0.0/16 -j RETURN
 iptables -t nat -A OUTPUT -d 100.64.0.0/10 -j RETURN
 iptables -t nat -A OUTPUT -d 169.254.0.0/16 -j RETURN
 iptables -t nat -A OUTPUT -d 224.0.0.0/4 -j RETURN
-
 # Redirect DNS and TCP traffic
 iptables -t nat -A OUTPUT -p udp --dport 53 -m owner ! --uid-owner {tor_uid} -j REDIRECT --to-ports {dns_port}
 iptables -t nat -A OUTPUT -p tcp --dport 53 -m owner ! --uid-owner {tor_uid} -j REDIRECT --to-ports {dns_port}
 iptables -t nat -A OUTPUT -p tcp --syn -m owner ! --uid-owner {tor_uid} -j REDIRECT --to-ports 9040
-
 # Filter rules
 iptables -P FORWARD ACCEPT
 iptables -P INPUT ACCEPT
 iptables -P OUTPUT ACCEPT
-
 iptables -F
 iptables -A OUTPUT -m state --state ESTABLISHED,RELATED -j ACCEPT
 iptables -A OUTPUT -d 127.0.0.0/8 -j ACCEPT
@@ -465,42 +345,6 @@ iptables -A OUTPUT -j REJECT
 
 def is_docker_active():
     """Check if Docker service is active."""
-    if not shutil.which('systemctl'):
-        debug("systemctl not available, cannot check Docker status")
-        return False
-        
-    try:
-        result = subprocess.run(['systemctl', 'is-active', 'docker'],
-                               capture_output=True, text=True, timeout=5)
-        return result.stdout.strip() == 'active'
-    except subprocess.TimeoutExpired:
-        warn("Timeout checking Docker status")
-        return False
-    except Exception as e:
-        debug(f"Error checking Docker status: {e}")
-        return False
-
-def ensure_checkpoint_dir():
-    """Ensure the checkpoint directory exists with proper permissions."""
-    checkpoint_dir = '/run/torghost'
-    try:
-        if not os.path.exists(checkpoint_dir):
-            os.makedirs(checkpoint_dir, exist_ok=True)
-            os.chmod(checkpoint_dir, 0o700)
-            info(f"Created checkpoint directory at {checkpoint_dir}")
-        else:
-            # Verify permissions if directory exists
-            current_mode = os.stat(checkpoint_dir).st_mode & 0o777
-            if current_mode != 0o700:
-                os.chmod(checkpoint_dir, 0o700)
-                info(f"Updated permissions for existing checkpoint directory at {checkpoint_dir}")
-    except PermissionError:
-        error(f"Permission denied: Cannot create {checkpoint_dir}. Run as root.", fatal=True)
-    except Exception as e:
-        warn(f"Could not create/setup checkpoint directory: {e}")
-
-def is_docker_active():
-    """Check if Docker service is active."""
     try:
         result = subprocess.run(['systemctl', 'is-active', 'docker'],
                                capture_output=True, text=True)
@@ -508,80 +352,32 @@ def is_docker_active():
     except Exception:
         return False
 
-def set_tor_dnsport(port):
-    """Force Tor to use a specific DNS port by modifying torrc."""
-    try:
-        # Validate port number
-        port = int(port)
-        if port < 1 or port > 65535:
-            error(f"Invalid port number: {port}", fatal=True)
-        
-        torrc_path = '/etc/tor/torrc'
-        # Backup original if needed
-        backup_path = f"{torrc_path}.bak-original"
-        if not os.path.exists(backup_path):
-            shutil.copy2(torrc_path, backup_path)  # copy2 preserves metadata
-        
-        # Get tor user permissions to restore later
-        tor_stat = os.stat(torrc_path)
-        tor_uid = tor_stat.st_uid
-        tor_gid = tor_stat.st_gid
-        
-        # Stop Tor service before modifying config
-        subprocess.run(['systemctl', 'stop', 'tor'], check=False)
-        
-        # Read current config
-        with open(torrc_path, 'r') as f:
-            lines = f.readlines()
-        
-        # Remove existing DNSPort lines (including commented ones)
-        new_lines = [line for line in lines if not re.match(r'^\s*#?\s*DNSPort\b', line)]
-        
-        # Add our DNSPort setting
-        new_lines.append(f'DNSPort 127.0.0.1:{port}\n')
-        
-        # Write updated config
-        with open(torrc_path, 'w') as f:
-            f.writelines(new_lines)
-        
-        # Restore permissions
-        os.chown(torrc_path, tor_uid, tor_gid)
-        
-        success(f"Configured Tor to use DNSPort {port}")
-        return True
-    except Exception as e:
-        error(f"Failed to set Tor DNSPort: {e}", fatal=True)
-
 def stop_docker_and_wait(timeout=15):
     """Stop Docker service and handle DOCKER PREROUTING rules."""
     try:
         if not is_docker_active():
             info("Docker not active; skipping stop.")
             return False
-        
         info("Creating checkpoint before stopping Docker")
         create_checkpoint('docker_prestop', {'note': 'stopping docker to avoid NAT interference'})
-        
         info("Stopping Docker to avoid Docker/ADDRTYPE NAT interference...")
         subprocess.run(['systemctl', 'stop', 'docker'], check=True, timeout=10)
-        
         # Wait for Docker to fully stop
         deadline = time.time() + timeout
         while time.time() < deadline:
             if not is_docker_active():
                 try:
                     with open(DOCKER_STOP_MARKER, 'w') as f:
-                        f.write(f"stopped at {time.time()}\n")
+                        f.write(f"stopped at {time.time()}
+")
                     create_checkpoint('docker_stopped', {'time': time.time()})
                     success("Docker stopped (marker written).")
-                    
                     # Backup and clean nat table
                     cleanup_docker_nat_rules()
                     return True
                 except Exception as e:
                     warn(f"Could not write Docker stop marker: {e}")
             time.sleep(0.5)
-        
         warn("Timed out waiting for Docker to stop, continuing anyway")
         return True
     except Exception as e:
@@ -595,12 +391,10 @@ def cleanup_docker_nat_rules():
         p = subprocess.run(['bash', '-c', 
             "iptables -t nat -S PREROUTING | grep -E 'ADDRTYPE|DOCKER' || true"],
             capture_output=True, text=True, timeout=10)
-        
         if p.stdout.strip():
             info("Found Docker PREROUTING rules that may cause NAT loops")
             ts = int(time.time())
             backup = f"/run/torghost-nat-backup-{ts}.rules"
-            
             try:
                 subprocess.run(['bash', '-c', f'iptables-save -t nat > {backup}'], 
                              check=True, timeout=10)
@@ -608,13 +402,11 @@ def cleanup_docker_nat_rules():
                 info(f"Backed up nat table to {backup}")
             except Exception as e:
                 warn(f"Could not backup nat table: {e}")
-            
             # Try to remove problematic rules
             rules_to_remove = [
                 "iptables -t nat -D PREROUTING -m addrtype --dst-type LOCAL -j DOCKER",
                 "iptables -t nat -D PREROUTING -j DOCKER"
             ]
-            
             for rule in rules_to_remove:
                 try:
                     r = subprocess.run(['bash', '-c', rule], 
@@ -633,19 +425,15 @@ def restore_docker_if_stopped():
     try:
         if not os.path.exists(DOCKER_STOP_MARKER):
             return
-        
         if not shutil.which('systemctl'):
             warn("systemctl not available; cannot restore Docker automatically.")
             return
-        
         info("Restoring Docker service that was stopped by torghost...")
         subprocess.run(['systemctl', 'start', 'docker'], check=True, timeout=15)
-        
         try:
             os.remove(DOCKER_STOP_MARKER)
         except Exception:
             pass
-        
         success("Docker service restored")
     except Exception as e:
         warn(f"Failed to restore Docker: {e}")
@@ -654,19 +442,16 @@ def stop_systemd_resolved():
     """Stop and mask systemd-resolved to free up port 53."""
     try:
         info("Stopping and masking systemd-resolved to free port 53...")
-        
         # Create checkpoint before making changes
         create_checkpoint('resolved_prestop', {'note': 'stopping systemd-resolved'})
-        
         # Stop and mask the service
         subprocess.run(['systemctl', 'stop', 'systemd-resolved'], check=False, timeout=10)
         subprocess.run(['systemctl', 'mask', 'systemd-resolved'], check=False, timeout=10)
         subprocess.run(['systemctl', 'stop', 'systemd-resolved.socket'], check=False, timeout=10)
-        
         # Create marker file
         with open(RESOLVED_STOP_MARKER, 'w') as f:
-            f.write(f"stopped at {time.time()}\n")
-        
+            f.write(f"stopped at {time.time()}
+")
         create_checkpoint('resolved_stopped', {'time': time.time()})
         success("systemd-resolved stopped and masked")
         return True
@@ -679,19 +464,15 @@ def restore_systemd_resolved():
     try:
         if not os.path.exists(RESOLVED_STOP_MARKER):
             return False
-        
         info("Restoring systemd-resolved service...")
-        
         # Unmask and start the service
         subprocess.run(['systemctl', 'unmask', 'systemd-resolved'], check=False, timeout=10)
         subprocess.run(['systemctl', 'start', 'systemd-resolved'], check=False, timeout=10)
-        
         # Remove marker file
         try:
             os.remove(RESOLVED_STOP_MARKER)
         except Exception:
             pass
-        
         success("systemd-resolved service restored")
         return True
     except Exception as e:
@@ -702,16 +483,13 @@ def backup_resolv_conf():
     """Backup the current resolv.conf file or symlink."""
     try:
         resolv_path = '/etc/resolv.conf'
-        
         if os.path.islink(resolv_path):
             # Handle symlink
             link_target = os.readlink(resolv_path)
             info(f"/etc/resolv.conf is a symlink to {link_target}")
-            
             # Save the symlink target
             with open(f"{RESOLVED_BACKUP_FILE}.link", 'w') as f:
                 f.write(link_target)
-            
             # Remove the symlink
             os.remove(resolv_path)
             info("Removed symlink to /etc/resolv.conf")
@@ -722,7 +500,6 @@ def backup_resolv_conf():
                 info(f"Backed up /etc/resolv.conf to {RESOLVED_BACKUP_FILE}")
             else:
                 info("Existing resolv.conf backup found; will not overwrite")
-        
         return True
     except Exception as e:
         warn(f"Failed to backup resolv.conf: {e}")
@@ -733,20 +510,16 @@ def restore_resolv_conf():
     try:
         resolv_path = '/etc/resolv.conf'
         link_backup = f"{RESOLVED_BACKUP_FILE}.link"
-        
         # If symlink backup exists, restore the symlink
         if os.path.exists(link_backup):
             with open(link_backup, 'r') as f:
                 link_target = f.read().strip()
-            
             # Remove current resolv.conf if it exists
             if os.path.exists(resolv_path):
                 os.remove(resolv_path)
-            
             # Create the symlink
             os.symlink(link_target, resolv_path)
             info(f"Restored symlink to {link_target}")
-            
             # Clean up backup files
             try:
                 os.remove(link_backup)
@@ -754,15 +527,12 @@ def restore_resolv_conf():
                     os.remove(RESOLVED_BACKUP_FILE)
             except Exception:
                 pass
-            
             return True
-        
         # If regular file backup exists, restore it
         if os.path.exists(RESOLVED_BACKUP_FILE):
             shutil.move(RESOLVED_BACKUP_FILE, resolv_path)
             info("Restored original /etc/resolv.conf")
             return True
-        
         warn("No resolv.conf backup found")
         return False
     except Exception as e:
@@ -774,9 +544,10 @@ def configure_tor_dns():
     try:
         # Ensure /etc/resolv.conf points to Tor
         with open('/etc/resolv.conf', 'w') as f:
-            f.write("nameserver 127.0.0.1\n")
-            f.write("options timeout:1\n")
-        
+            f.write("nameserver 127.0.0.1
+")
+            f.write("options timeout:1
+")
         success("Configured /etc/resolv.conf to use Tor DNS")
         return True
     except Exception as e:
@@ -788,32 +559,45 @@ def set_tor_dnsport(port):
     try:
         if not os.path.exists(TORRC_PATH):
             error(f"Tor config file not found at {TORRC_PATH}", fatal=True)
-        
+        # Validate port number
+        port_int = int(port)
+        if port_int < 1 or port_int > 65535:
+            error(f"Invalid port number: {port}", fatal=True)
+
         # Backup original torrc if needed
         if not os.path.exists(TORRC_BACKUP_PATH):
             shutil.copy(TORRC_PATH, TORRC_BACKUP_PATH)
             info(f"Backed up original torrc to {TORRC_BACKUP_PATH}")
-        
+
+        # Get tor user permissions to restore later
+        tor_stat = os.stat(TORRC_PATH)
+        tor_uid = tor_stat.st_uid
+        tor_gid = tor_stat.st_gid
+
+        # Stop Tor service before modifying config
+        subprocess.run(['systemctl', 'stop', 'tor'], check=False)
+
         # Read current config
         with open(TORRC_PATH, 'r') as f:
-            data = f.read()
-        
-        # Remove any existing DNSPort lines
-        lines = [line for line in data.splitlines() 
-                if not re.match(r'^\s*(#)?\s*DNSPort\b', line)]
-        
+            lines = f.readlines()
+
+        # Remove existing DNSPort lines (including commented ones)
+        new_lines = [line for line in lines if not re.match(r'^\s*#?\s*DNSPort\b', line)]
+
         # Add our DNSPort setting
-        lines.append(f"DNSPort 127.0.0.1:{port}")
-        
+        new_lines.append(f'DNSPort 127.0.0.1:{port}
+')
+
         # Write updated config
         with open(TORRC_PATH, 'w') as f:
-            f.write("\n".join(lines))
-        
-        success(f"Set Tor DNSPort to {port}")
+            f.writelines(new_lines)
+
+        # Restore permissions
+        os.chown(TORRC_PATH, tor_uid, tor_gid)
+        success(f"Configured Tor to use DNSPort {port}")
         return True
     except Exception as e:
-        warn(f"Failed to set DNSPort in torrc: {e}")
-        return False
+        error(f"Failed to set Tor DNSPort: {e}", fatal=True)
 
 def ensure_tor_config():
     """Ensure Tor is properly configured for transparent proxying."""
@@ -823,29 +607,29 @@ def ensure_tor_config():
             if os.path.exists(TORRC_PATH):
                 shutil.copy(TORRC_PATH, TORRC_BACKUP_PATH)
                 info(f"Backed up original torrc to {TORRC_BACKUP_PATH}")
-        
+
         # Read current config or start with empty
         current_config = ""
         if os.path.exists(TORRC_PATH):
             with open(TORRC_PATH, 'r') as f:
                 current_config = f.read()
-        
+
         # Remove any existing TorGhost block
         if TORRC_MARKER in current_config:
             pre_marker = current_config.split(TORRC_MARKER)[0]
-            current_config = pre_marker.rstrip() + "\n\n"
-        
+            current_config = pre_marker.rstrip() + "
+"
+
         # Add our configuration block
         current_config += TORCONTENT
-        
+
         # Write updated config
         with open(TORRC_PATH, 'w') as f:
             f.write(current_config)
-        
+
         # Set proper permissions
         subprocess.run(['chown', 'tor:tor', TORRC_PATH], check=False)
         subprocess.run(['chmod', '644', TORRC_PATH], check=False)
-        
         success("Tor configuration updated successfully")
         return True
     except Exception as e:
@@ -858,28 +642,26 @@ def detect_nat_conflicts():
         result = subprocess.run(['bash', '-c', 
             "iptables -t nat -L OUTPUT -n -v | grep REDIRECT || true"],
             capture_output=True, text=True, timeout=10)
-        
         if result.stdout.strip():
             warn("Existing NAT REDIRECT rules detected:")
-            for line in result.stdout.strip().split('\n'):
+            for line in result.stdout.strip().split('
+'):
                 warn(f"  {line}")
-            return True
-        
+            return True # Conflict found
         # Check for PREROUTING rules that might intercept traffic
         result = subprocess.run(['bash', '-c', 
             "iptables -t nat -L PREROUTING -n -v | grep DOCKER || true"],
             capture_output=True, text=True, timeout=10)
-        
         if result.stdout.strip():
             warn("Docker PREROUTING rules detected (may cause NAT loops):")
-            for line in result.stdout.strip().split('\n'):
+            for line in result.stdout.strip().split('
+'):
                 warn(f"  {line}")
-            return True
-        
-        return False
+            return True # Conflict found
+        return False # No conflict found
     except Exception as e:
         warn(f"Could not inspect NAT rules: {e}")
-        return True
+        return True # Assume conflict on error
 
 def debug(msg):
     """Debug logging function (more verbose than info)"""
@@ -901,13 +683,10 @@ def create_checkpoint(name, payload):
     try:
         ensure_checkpoint_dir()
         checkpoint_path = os.path.join(CHECKPOINT_DIR, f"{name}-{int(time.time())}.json")
-        
         # Add timestamp and sequence number
         payload['timestamp'] = time.time()
-        
         with open(checkpoint_path, 'w') as f:
             json.dump(payload, f, indent=2)
-        
         debug(f"Created checkpoint: {checkpoint_path}")
         return checkpoint_path
     except Exception as e:
@@ -924,21 +703,17 @@ def save_iptables_snapshot():
             'ipv4': None,
             'ipv6': None
         }
-        
         # Save IPv4 rules
         ipv4_file = os.path.join(CHECKPOINT_DIR, f"iptables-{ts}.rules")
         subprocess.run(['bash', '-c', f'iptables-save > {ipv4_file}'], check=True)
         snapshot['ipv4'] = ipv4_file
-        
         # Save IPv6 rules
         ipv6_file = os.path.join(CHECKPOINT_DIR, f"ip6tables-{ts}.rules")
         subprocess.run(['bash', '-c', f'ip6tables-save > {ipv6_file}'], check=True)
         snapshot['ipv6'] = ipv6_file
-        
         # Write to latest checkpoint
         with open(LATEST_CHECKPOINT, 'w') as f:
             json.dump(snapshot, f, indent=2)
-        
         create_checkpoint('iptables_snapshot', snapshot)
         info(f"Saved iptables snapshot: {ipv4_file}, {ipv6_file}")
         return snapshot
@@ -952,12 +727,10 @@ def restore_iptables_snapshot():
         if not os.path.exists(LATEST_CHECKPOINT):
             debug("No iptables snapshot found to restore")
             return False
-        
         with open(LATEST_CHECKPOINT, 'r') as f:
             snapshot = json.load(f)
-        
+
         restored = False
-        
         # Restore IPv4 rules if available
         ipv4_file = snapshot.get('ipv4')
         if ipv4_file and os.path.exists(ipv4_file):
@@ -967,7 +740,7 @@ def restore_iptables_snapshot():
                 restored = True
             except Exception as e:
                 warn(f"Failed to restore IPv4 iptables: {e}")
-        
+
         # Restore IPv6 rules if available
         ipv6_file = snapshot.get('ipv6')
         if ipv6_file and os.path.exists(ipv6_file):
@@ -977,14 +750,13 @@ def restore_iptables_snapshot():
                 restored = True
             except Exception as e:
                 warn(f"Failed to restore IPv6 ip6tables: {e}")
-        
+
         # Clean up checkpoint files
         try:
             if os.path.exists(LATEST_CHECKPOINT):
                 os.remove(LATEST_CHECKPOINT)
         except Exception:
             pass
-        
         return restored
     except Exception as e:
         warn(f"Failed to restore iptables snapshot: {e}")
@@ -993,214 +765,164 @@ def restore_iptables_snapshot():
 def restore_system_state():
     """Attempt to restore system to pre-torghost state."""
     info("Attempting to restore system state...")
-    
+    restore_results = {
+        'iptables': False,
+        'resolv_conf': False,
+        'resolved': False,
+        'docker': False,
+        'ipv6': False,
+        'tor': False
+    }
+
     # 1. Try to restore iptables first to restore network connectivity
     try:
-        if restore_iptables_snapshot():
+        restore_results['iptables'] = restore_iptables_snapshot()
+        if restore_results['iptables']:
             success("Restored iptables rules from checkpoint")
+        else:
+            warn("No iptables snapshot found, using default ACCEPT policy")
+            try:
+                subprocess.run(['bash', '-c', """
+                iptables -P INPUT ACCEPT
+                iptables -P FORWARD ACCEPT
+                iptables -P OUTPUT ACCEPT
+                iptables -t nat -F
+                iptables -t mangle -F
+                iptables -t raw -F
+                iptables -F
+                iptables -X
+                ip6tables -P INPUT ACCEPT
+                ip6tables -P FORWARD ACCEPT
+                ip6tables -P OUTPUT ACCEPT
+                ip6tables -t nat -F
+                ip6tables -t mangle -F
+                ip6tables -t raw -F
+                ip6tables -F
+                ip6tables -X
+                """], check=True, timeout=15)
+                success("Default firewall policies restored")
+                restore_results['iptables'] = True
+            except Exception as e:
+                error(f"Failed to restore default firewall policies: {e}")
     except Exception as e:
         warn(f"Error restoring iptables: {e}")
-    
+
     # 2. Restore resolv.conf
     try:
-        if restore_resolv_conf():
+        restore_results['resolv_conf'] = restore_resolv_conf()
+        if restore_results['resolv_conf']:
             success("Restored DNS configuration")
+        else:
+            warn("Could not restore original resolv.conf, creating a default one")
+            try:
+                with open('/etc/resolv.conf', 'w') as f:
+                    f.write("nameserver 1.1.1.1
+")
+                    f.write("nameserver 8.8.8.8
+")
+                success("Created default resolv.conf")
+                restore_results['resolv_conf'] = True
+            except Exception as e:
+                error(f"Failed to create default resolv.conf: {e}")
     except Exception as e:
         warn(f"Error restoring resolv.conf: {e}")
-    
+
     # 3. Restore systemd-resolved if we stopped it
     try:
-        if restore_systemd_resolved():
+        restore_results['resolved'] = restore_systemd_resolved()
+        if restore_results['resolved']:
             success("Restored systemd-resolved service")
     except Exception as e:
         warn(f"Error restoring systemd-resolved: {e}")
-    
+
     # 4. Restore Docker if we stopped it
     try:
-        if restore_docker_if_stopped():
+        restore_results['docker'] = restore_docker_if_stopped()
+        if restore_results['docker']:
             success("Restored Docker service")
     except Exception as e:
         warn(f"Error restoring Docker: {e}")
-    
+
     # 5. Restore IPv6 settings
     try:
         restore_ipv6()
+        restore_results['ipv6'] = True
     except Exception as e:
         warn(f"Error restoring IPv6 settings: {e}")
-    
+
     # 6. Stop Tor service
     try:
         subprocess.run(['systemctl', 'stop', 'tor'], check=False, timeout=10)
         info("Stopped Tor service")
+        restore_results['tor'] = True
     except Exception as e:
         warn(f"Error stopping Tor service: {e}")
-    
-    success("System restoration attempted. Network connectivity should be restored.")
 
-# --- Core operational functions ----------------------------------------------
-def start_torghost():
+    success("System restoration attempted. Network connectivity should be restored.")
+    debug(f"Restore results: {restore_results}")
+
+# --- Helper function for Tor startup and DNS configuration ---
+def _configure_and_start_tor_with_dns():
     """
-    Start TorGhost with all necessary preparatory steps
+    Handles Tor configuration, startup, and DNS readiness verification.
+    Returns the DNS port used (5353 or 53) and success status.
     """
-    logo()
-    info("Starting TorGhost...")
-    
-    # CRITICAL: Create Tor runtime directory FIRST
-    ensure_tor_runtime_dir()
-    
-    # --- CRITICAL PRE-START CHECKS ---
-    # 1. Stop Docker completely with thorough cleanup
-    if is_docker_active():
-        info("Docker service is running - this WILL interfere with Tor transparent proxying")
-        info("Stopping Docker and cleaning up its iptables rules...")
-        
-        # Stop docker service
-        subprocess.run(['systemctl', 'stop', 'docker'], check=False)
-        
-        # Remove ALL docker-related iptables rules
-        try:
-            # Clean nat table completely
-            subprocess.run(['iptables', '-t', 'nat', '-F'], check=False)
-            subprocess.run(['iptables', '-t', 'nat', '-X', 'DOCKER'], check=False)
-            
-            # Clean filter table DOCKER rules
-            subprocess.run(['iptables', '-F', 'DOCKER'], check=False)
-            subprocess.run(['iptables', '-X', 'DOCKER'], check=False)
-            
-            # Remove any docker chains
-            subprocess.run(['bash', '-c', 'iptables -L | grep "^Chain DOCKER" | cut -d" " -f2 | xargs -r -n1 iptables -X'], check=False)
-            
-            success("Docker iptables rules cleaned up")
-        except Exception as e:
-            warn(f"Failed to clean Docker iptables rules: {e}")
-    else:
-        info("Docker service is not running - good for Tor operation")
-    
-    # 2. Ensure systemd-resolved is properly masked
-    try:
-        # Check if systemd-resolved is masked
-        result = subprocess.run(['systemctl', 'is-enabled', 'systemd-resolved'], 
-                               capture_output=True, text=True)
-        if 'masked' not in result.stdout.lower():
-            info("Masking systemd-resolved to prevent DNS conflicts...")
-            subprocess.run(['systemctl', 'mask', 'systemd-resolved'], check=False)
-            subprocess.run(['systemctl', 'stop', 'systemd-resolved'], check=False)
-            success("systemd-resolved has been masked and stopped")
-    except Exception as e:
-        warn(f"Could not mask systemd-resolved: {e}")
-    
-    # 3. Handle Avahi conflict on port 5353
-    try:
-        # Check if anything is listening on 5353
-        result = subprocess.run(['ss', '-lun', '( sport = :5353 )'], 
-                               capture_output=True, text=True)
-        if 'LISTEN' in result.stdout or 'UNCONN' in result.stdout:
-            info("Port 5353 is in use - configuring Tor to use port 53 directly")
-            # Force Tor to use port 53 instead of 5353
-            set_tor_dnsport(53)
-            # Stop avahi temporarily if it's the culprit
-            if 'avahi' in result.stdout:
-                info("Stopping avahi-daemon temporarily to free port 5353")
-                subprocess.run(['systemctl', 'stop', 'avahi-daemon'], check=False)
-    except Exception as e:
-        warn(f"Could not check port 5353 status: {e}")
-    
-    # 4. Create checkpoint directory early
-    ensure_checkpoint_dir()
-    
-    # 5. Verify no other services are using port 53
-    try:
-        result = subprocess.run(['ss', '-lun', '( sport = :domain )'], 
-                               capture_output=True, text=True)
-        if 'LISTEN' in result.stdout or 'UNCONN' in result.stdout:
-            warn("Port 53 is still in use by another service! This will prevent Tor from starting properly.")
-            warn("Please identify and stop the conflicting service manually before continuing.")
-            # Show which process is using port 53
-            subprocess.run(['ss', '-lunp', '( sport = :domain )'])
-            error("Cannot proceed with port 53 conflicts. Resolve manually and retry.", fatal=True)
-    except Exception as e:
-        warn(f"Could not check port 53 status: {e}")
-    
-    # 6. Setup logging
-    logging.basicConfig(
-        filename='/var/log/torghost.log',
-        level=logging.DEBUG,
-        format='%(asctime)s - %(levelname)s - %(message)s'
-    )
-    
-    # 7. Initial checkpoint
-    initial_checkpoint = {
-        'started_at': time.time(),
-        'user': os.environ.get('SUDO_USER', os.environ.get('USER', 'unknown')),
-        'action': 'start'
-    }
-    create_checkpoint('start_init', initial_checkpoint)
-    
-    # 8. Save current iptables state
-    info("Saving current firewall state...")
-    save_iptables_snapshot()
-    create_checkpoint('iptables_saved', {'note': 'original firewall state saved'})
-    
-    # 9. Check for conflicting NAT rules
-    if detect_nat_conflicts():
-        error("Conflicting NAT rules detected. This could cause network loops or break connectivity. "
-             "Please review your firewall rules or run in a clean environment.", fatal=True)
-    
-    # 10. Stop systemd-resolved
-    if not stop_systemd_resolved():
-        error("Could not stop systemd-resolved. This is required for Tor to bind to port 53. "
-             "Please stop it manually and try again.", fatal=True)
-    
-    # 11. Stop Docker if running
-    stop_docker_and_wait()
-    
-    # 12. Backup resolv.conf
-    if not backup_resolv_conf():
-        warn("Could not backup resolv.conf, proceeding anyway")
-    
-    # 13. Configure Tor
+    info("Configuring and starting Tor...")
+    # 1. Configure Tor (writes torrc)
     ensure_tor_config()
     create_checkpoint('tor_configured', {'torrc_path': TORRC_PATH})
-    
-    # 14. Start Tor service
+
+    # 2. Start Tor service
     info("Starting Tor service...")
     try:
         subprocess.run(['systemctl', 'restart', 'tor'], check=True, timeout=30)
-        success("Tor service started")
+        # Verify Tor service is running
+        tor_status_result = subprocess.run(['systemctl', 'is-active', 'tor'], capture_output=True, text=True)
+        if tor_status_result.stdout.strip() != 'active':
+             error(f"Tor service failed to start or is not active after restart. Status: {tor_status_result.stdout.strip()}", fatal=True)
+        success("Tor service started and verified as active")
         create_checkpoint('tor_started', {'time': time.time()})
     except Exception as e:
-        error(f"Failed to start Tor service: {e}\n"
+        error(f"Failed to start Tor service: {e}
+"
              "Check journalctl -u tor for details. "
-             "Common issues:\n"
-             "  - Port conflicts (another service using 9040, 9050, 9051)\n"
-             "  - Missing permissions on /var/lib/tor or /run/tor\n"
+             "Common issues:
+"
+             "  - Port conflicts (another service using 9040, 9050, 9051)
+"
+             "  - Missing permissions on /var/lib/tor or /run/tor
+"
              "  - Configuration errors in /etc/tor/torrc", 
              fatal=True)
-    
-    # 15. Wait for Tor control port
+
+    # 3. Wait for Tor control port
     info("Waiting for Tor control port to be ready...")
     if not wait_for_port('127.0.0.1', 9051, timeout=60):
         error("Tor control port did not become available. Check 'journalctl -u tor' for errors.", 
              fatal=True)
     success("Tor control port is ready")
-    
-    # 16. Wait for Tor bootstrap
+
+    # 4. Wait for Tor bootstrap
     if not wait_for_bootstrap(timeout=180):
         error("Tor failed to bootstrap. Check 'journalctl -u tor' for detailed errors.", 
              fatal=True)
-    
-    # 17. Configure DNS
-    info("Configuring DNS to use Tor...")
-    if not configure_tor_dns():
-        error("Failed to configure DNS. System may lose internet connectivity.", 
-             fatal=True)
-    
-    # 18. Wait for Tor DNS port
-    info("Waiting for Tor DNS to be ready on port 5353...")
+
+    # 5. Determine DNS Port and wait for readiness
+    info("Checking Tor DNS readiness on port 5353...")
+    dns_port = 5353
     if not wait_for_port('127.0.0.1', 5353, timeout=30):
-        warn("Tor DNS not ready on port 5353, trying port 53...")
+        warn("Tor DNS not ready on port 5353, switching to port 53...")
         set_tor_dnsport(53)
-        subprocess.run(['systemctl', 'restart', 'tor'], check=True, timeout=30)
+        # Restart Tor after config change
+        try:
+            subprocess.run(['systemctl', 'restart', 'tor'], check=True, timeout=30)
+            # Verify restarted Tor service is running
+            tor_status_result = subprocess.run(['systemctl', 'is-active', 'tor'], capture_output=True, text=True)
+            if tor_status_result.stdout.strip() != 'active':
+                 error(f"Tor service failed to start after DNSPort change or is not active. Status: {tor_status_result.stdout.strip()}", fatal=True)
+        except Exception as e:
+            error(f"Failed to restart Tor after changing DNSPort: {e}", fatal=True)
+        
         if not wait_for_bootstrap(timeout=60):
             error("Tor failed to bootstrap after switching to port 53", fatal=True)
         if not wait_for_port('127.0.0.1', 53, timeout=30):
@@ -1209,10 +931,166 @@ def start_torghost():
         dns_port = 53
         success("Using Tor DNS on port 53")
     else:
-        dns_port = 5353
         success("Tor DNS ready on port 5353")
-    
-    # 19. Get Tor UID
+
+    return dns_port, True
+
+
+# --- Core operational functions ----------------------------------------------
+def prepare_system_for_tor():
+    """Completely prepare the system for Tor by stopping interfering services."""
+    info("Preparing system for Tor by stopping interfering services...")
+
+    # 1. Check for processes using port 53 BEFORE stopping resolved
+    info("Checking for processes using port 53...")
+    try:
+        result = subprocess.run(['ss', '-lun', '( sport = :domain )'], 
+                               capture_output=True, text=True)
+        if 'LISTEN' in result.stdout or 'UNCONN' in result.stdout:
+            warn("Port 53 appears to be in use before stopping resolved. Attempting to identify process:")
+            subprocess.run(['ss', '-lunp', '( sport = :domain )'])
+            # Try to kill any remaining processes using port 53 if known culprits
+            # (Be careful here, killing random processes is risky)
+            # subprocess.run(['pkill', '-f', 'known_culprit_service'], check=False)
+            # time.sleep(2)
+        # Final verification before proceeding
+        result = subprocess.run(['ss', '-lun', '( sport = :domain )'], 
+                               capture_output=True, text=True)
+        if 'LISTEN' in result.stdout or 'UNCONN' in result.stdout:
+             error("Port 53 is still occupied before stopping systemd-resolved. Please check manually with 'sudo ss -lunp \"sport = :domain\"'", fatal=True)
+        else:
+            success("Port 53 is free before stopping systemd-resolved")
+    except Exception as e:
+        warn(f"Error checking port 53 status initially: {e}")
+
+    # 2. Stop and mask systemd-resolved completely
+    try:
+        # Stop the service and its socket
+        subprocess.run(['systemctl', 'stop', 'systemd-resolved'], check=False)
+        subprocess.run(['systemctl', 'stop', 'systemd-resolved.socket'], check=False)
+        subprocess.run(['systemctl', 'mask', 'systemd-resolved'], check=False)
+        # Verify it's not running
+        result = subprocess.run(['systemctl', 'is-active', 'systemd-resolved'], 
+                               capture_output=True, text=True)
+        if result.stdout.strip() == 'active':
+            warn("systemd-resolved is still active after stop attempt!")
+        success("systemd-resolved stopped and masked")
+    except Exception as e:
+        warn(f"Error stopping systemd-resolved: {e}")
+
+    # 3. Ensure resolv.conf is a regular file pointing to localhost
+    try:
+        # Remove symlink if it exists
+        if os.path.islink('/etc/resolv.conf'):
+            info("Removing systemd-resolved symlink at /etc/resolv.conf")
+            os.remove('/etc/resolv.conf')
+        # Create a clean resolv.conf
+        with open('/etc/resolv.conf', 'w') as f:
+            f.write("nameserver 127.0.0.1
+")
+            f.write("options timeout:1
+")
+        success("Created clean /etc/resolv.conf pointing to localhost")
+    except Exception as e:
+        error(f"Failed to create clean resolv.conf: {e}", fatal=True)
+
+    # 4. Verify port 53 is free AFTER stopping resolved
+    info("Verifying port 53 is free after stopping resolved...")
+    try:
+        result = subprocess.run(['ss', '-lun', '( sport = :domain )'], 
+                               capture_output=True, text=True)
+        if 'LISTEN' in result.stdout or 'UNCONN' in result.stdout:
+            warn("Port 53 appears to still be in use after stopping resolved. Attempting to identify process:")
+            subprocess.run(['ss', '-lunp', '( sport = :domain )'])
+            # Try to kill any remaining processes using port 53
+            subprocess.run(['pkill', '-f', 'systemd-resolved'], check=False)
+            time.sleep(2)
+        # Final verification
+        result = subprocess.run(['ss', '-lun', '( sport = :domain )'], 
+                               capture_output=True, text=True)
+        if 'LISTEN' in result.stdout or 'UNCONN' in result.stdout:
+            error("Port 53 is still occupied after cleanup attempts. Please check manually with 'sudo ss -lunp \"sport = :domain\"'", fatal=True)
+        else:
+            success("Port 53 is now free")
+    except Exception as e:
+        warn(f"Error checking port 53 status: {e}")
+
+    return True
+
+def start_torghost():
+    """
+    Start TorGhost with all necessary preparatory steps
+    """
+    logo()
+    info("Starting TorGhost...")
+
+    # --- CRITICAL PRE-START CHECKS ---
+    # 1. Stop Docker completely with thorough cleanup
+    if is_docker_active():
+        info("Docker service is running - this WILL interfere with Tor transparent proxying")
+        info("Stopping Docker and cleaning up its iptables rules...")
+        # Stop docker service
+        subprocess.run(['systemctl', 'stop', 'docker'], check=False)
+        # Remove ALL docker-related iptables rules
+        try:
+            # Clean nat table completely
+            subprocess.run(['iptables', '-t', 'nat', '-F'], check=False)
+            subprocess.run(['iptables', '-t', 'nat', '-X', 'DOCKER'], check=False)
+            # Clean filter table DOCKER rules
+            subprocess.run(['iptables', '-F', 'DOCKER'], check=False)
+            subprocess.run(['iptables', '-X', 'DOCKER'], check=False)
+            # Remove any docker chains
+            subprocess.run(['bash', '-c', 'iptables -L | grep "^Chain DOCKER" | cut -d" " -f2 | xargs -r -n1 iptables -X'], check=False)
+            success("Docker iptables rules cleaned up")
+        except Exception as e:
+            warn(f"Failed to clean Docker iptables rules: {e}")
+    else:
+        info("Docker service is not running - good for Tor operation")
+
+    # 2. Ensure systemd-resolved is properly masked (moved to prepare_system_for_tor)
+    # 3. Handle Avahi conflict on port 5353 (handled within _configure_and_start_tor_with_dns if needed)
+    # 4. Create checkpoint directory early
+    ensure_checkpoint_dir()
+    # 5. Verify no other services are using port 53 (handled in prepare_system_for_tor)
+    # 6. Setup logging
+    logging.basicConfig(
+        filename='/var/log/torghost.log',
+        level=logging.DEBUG,
+        format='%(asctime)s - %(levelname)s - %(message)s'
+    )
+    # 7. Initial checkpoint
+    initial_checkpoint = {
+        'started_at': time.time(),
+        'user': os.environ.get('SUDO_USER', os.environ.get('USER', 'unknown')),
+        'action': 'start'
+    }
+    create_checkpoint('start_init', initial_checkpoint)
+    # 8. Save current iptables state
+    info("Saving current firewall state...")
+    save_iptables_snapshot()
+    create_checkpoint('iptables_saved', {'note': 'original firewall state saved'})
+    # 9. Check for conflicting NAT rules
+    if detect_nat_conflicts():
+        error("Conflicting NAT rules detected. This could cause network loops or break connectivity. "
+             "Please review your firewall rules or run in a clean environment.", fatal=True)
+    # 10. Prepare system (stop resolved, handle resolv.conf, check port 53)
+    prepare_system_for_tor()
+    # 11. Stop Docker if running (moved earlier, but confirmation checkpoint here)
+    stop_docker_and_wait()
+    # 12. Backup resolv.conf (done in prepare_system_for_tor)
+    # 13-18. Moved to _configure_and_start_tor_with_dns
+    dns_port, tor_success = _configure_and_start_tor_with_dns()
+    if not tor_success:
+        error("Failed to configure and start Tor with DNS", fatal=True)
+
+    # 19. Configure DNS (must happen *after* Tor DNS is ready)
+    info("Configuring system DNS to use Tor...")
+    if not configure_tor_dns():
+        error("Failed to configure system DNS. System may lose internet connectivity.", 
+             fatal=True)
+    create_checkpoint('dns_configured', {'dns_port_used': dns_port})
+
+    # 20. Get Tor UID
     info("Getting Tor user UID...")
     try:
         tor_uid = subprocess.run(['id', '-u', 'tor'], 
@@ -1220,26 +1098,25 @@ def start_torghost():
         success(f"Tor UID: {tor_uid}")
     except Exception as e:
         error(f"Could not get Tor UID: {e}", fatal=True)
-    
-    # 20. Disable IPv6
+
+    # 21. Disable IPv6
     disable_ipv6()
-    
-    # 21. Apply iptables rules
+
+    # 22. Apply iptables rules
     info("Applying firewall rules to route traffic through Tor...")
     iptables_script = IPTABLESSCRIPT.format(tor_uid=tor_uid, dns_port=dns_port)
-    
     try:
         subprocess.run(['bash', '-c', iptables_script], check=True, timeout=30)
         success("Firewall rules applied successfully")
         create_checkpoint('iptables_applied', {'dns_port': dns_port, 'tor_uid': tor_uid})
     except Exception as e:
         error(f"Failed to apply firewall rules: {e}", fatal=True)
-    
-    # 22. Verify connectivity
+
+    # 23. Verify connectivity
     info("Verifying connectivity through Tor...")
     current_ip = get_ip()
-    
-    # 23. Final checkpoint
+
+    # 24. Final checkpoint
     final_checkpoint = {
         'completed_at': time.time(),
         'current_ip': current_ip,
@@ -1247,7 +1124,7 @@ def start_torghost():
         'status': 'active'
     }
     create_checkpoint('start_complete', final_checkpoint)
-    
+
     success(f"TorGhost started successfully! All traffic is now routed through Tor.")
     info(f"Your current public IP is: {current_ip}")
     info("Run 'sudo torghost stop' to revert all changes.")
@@ -1258,14 +1135,12 @@ def stop_torghost(monitor=False, interval=10):
     """
     logo()
     info("Stopping TorGhost and restoring system state")
-    
     # Setup logging
     logging.basicConfig(
         filename='/var/log/torghost.log',
         level=logging.DEBUG,
         format='%(asctime)s - %(levelname)s - %(message)s'
     )
-    
     # Initial checkpoint
     initial_checkpoint = {
         'started_at': time.time(),
@@ -1273,7 +1148,7 @@ def stop_torghost(monitor=False, interval=10):
         'action': 'stop'
     }
     create_checkpoint('stop_init', initial_checkpoint)
-    
+
     # 1. Stop Tor service first
     info("Stopping Tor service...")
     try:
@@ -1281,7 +1156,7 @@ def stop_torghost(monitor=False, interval=10):
         success("Tor service stopped")
     except Exception as e:
         warn(f"Could not stop Tor service: {e}")
-    
+
     # 2. Restore original firewall rules
     info("Restoring original firewall rules...")
     if not restore_iptables_snapshot():
@@ -1310,32 +1185,34 @@ def stop_torghost(monitor=False, interval=10):
             error(f"Failed to restore default firewall policies: {e}", fatal=True)
     else:
         success("Restored original firewall rules from checkpoint")
-    
+
     # 3. Restore resolv.conf
     info("Restoring DNS configuration...")
     if not restore_resolv_conf():
         warn("Could not restore original resolv.conf, creating a default one")
         try:
             with open('/etc/resolv.conf', 'w') as f:
-                f.write("nameserver 1.1.1.1\n")
-                f.write("nameserver 8.8.8.8\n")
+                f.write("nameserver 1.1.1.1
+")
+                f.write("nameserver 8.8.8.8
+")
             success("Created default resolv.conf")
         except Exception as e:
             error(f"Failed to create default resolv.conf: {e}", fatal=True)
     else:
         success("Restored original DNS configuration")
-    
+
     # 4. Restore systemd-resolved if we stopped it
     if restore_systemd_resolved():
         success("Restored systemd-resolved service")
-    
+
     # 5. Restore Docker if we stopped it
     if restore_docker_if_stopped():
         success("Restored Docker service")
-    
+
     # 6. Restore IPv6 settings
     restore_ipv6()
-    
+
     # 7. Clean up Tor configuration
     info("Cleaning up Tor configuration...")
     try:
@@ -1343,7 +1220,6 @@ def stop_torghost(monitor=False, interval=10):
             # Read current config
             with open(TORRC_PATH, 'r') as f:
                 current_config = f.read()
-            
             # If it contains our marker, restore from backup
             if TORRC_MARKER in current_config:
                 shutil.move(TORRC_BACKUP_PATH, TORRC_PATH)
@@ -1353,11 +1229,11 @@ def stop_torghost(monitor=False, interval=10):
                 os.remove(TORRC_BACKUP_PATH)
     except Exception as e:
         warn(f"Could not restore Tor configuration: {e}")
-    
+
     # 8. Verify connectivity
     info("Verifying system connectivity...")
     current_ip = get_ip()
-    
+
     # 9. Final checkpoint
     final_checkpoint = {
         'completed_at': time.time(),
@@ -1365,7 +1241,7 @@ def stop_torghost(monitor=False, interval=10):
         'status': 'stopped'
     }
     create_checkpoint('stop_complete', final_checkpoint)
-    
+
     success(f"TorGhost stopped successfully! System restored to original state.")
     info(f"Your current public IP is: {current_ip}")
 
@@ -1375,7 +1251,6 @@ def switch_tor():
     """
     logo()
     info("Requesting new Tor circuit...")
-    
     try:
         with Controller.from_port(port=9051) as controller:
             try:
@@ -1387,7 +1262,6 @@ def switch_tor():
                 error(f"Failed to authenticate with Tor control port: {e}", fatal=True)
     except Exception as e:
         error(f"Could not connect to Tor control port: {e}", fatal=True)
-    
     current_ip = get_ip()
     success(f"Your new public IP through Tor is: {current_ip}")
 
@@ -1396,8 +1270,8 @@ def show_status():
     Show current TorGhost status.
     """
     logo()
-    print(f"{bcolors.BOLD}TorGhost Status:{bcolors.ENDC}\n")
-    
+    print(f"{bcolors.BOLD}TorGhost Status:{bcolors.ENDC}
+")
     # Check if TorGhost is active (look for checkpoints or markers)
     is_active = False
     markers = [
@@ -1405,31 +1279,30 @@ def show_status():
         DOCKER_STOP_MARKER,
         LATEST_CHECKPOINT
     ]
-    
     for marker in markers:
         if os.path.exists(marker):
             is_active = True
             break
-    
     # Check Tor service status
     try:
         tor_status = subprocess.run(['systemctl', 'is-active', 'tor'],
                                   capture_output=True, text=True).stdout.strip()
     except Exception:
         tor_status = "unknown"
-    
     # Get current IP
     current_ip = get_ip()
-    
+
     print(f"TorGhost Active: {bcolors.GREEN if is_active else bcolors.RED}{is_active}{bcolors.ENDC}")
     print(f"Tor Service: {bcolors.GREEN if tor_status == 'active' else bcolors.RED}{tor_status}{bcolors.ENDC}")
     print(f"Current Public IP: {bcolors.GREEN}{current_ip}{bcolors.ENDC}")
-    
+
     if is_active:
-        print(f"\n{bcolors.YELLOW}TorGhost is currently active. All traffic is being routed through Tor.{bcolors.ENDC}")
+        print(f"
+{bcolors.YELLOW}TorGhost is currently active. All traffic is being routed through Tor.{bcolors.ENDC}")
         print(f"Run 'sudo torghost stop' to restore normal networking.")
     else:
-        print(f"\n{bcolors.GREEN}TorGhost is not active. System is using normal networking.{bcolors.ENDC}")
+        print(f"
+{bcolors.GREEN}TorGhost is not active. System is using normal networking.{bcolors.ENDC}")
         print(f"Run 'sudo torghost start' to route all traffic through Tor.")
 
 def diagnose_system():
@@ -1438,9 +1311,9 @@ def diagnose_system():
     """
     logo()
     info("Running comprehensive diagnostics...")
-    
     def run_cmd(cmd, description):
-        print(f"\n{bcolors.BOLD}{description}:{bcolors.ENDC}")
+        print(f"
+{bcolors.BOLD}{description}:{bcolors.ENDC}")
         try:
             result = subprocess.run(cmd, capture_output=True, text=True, timeout=15)
             print(result.stdout)
@@ -1449,30 +1322,32 @@ def diagnose_system():
                 print(result.stderr)
         except Exception as e:
             print(f"{bcolors.RED}Error running command: {e}{bcolors.ENDC}")
-    
+
     # 1. Network interfaces
     run_cmd(['ip', 'addr', 'show'], "Network interfaces")
-    
+
     # 2. DNS configuration
-    print(f"\n{bcolors.BOLD}DNS Configuration:{bcolors.ENDC}")
+    print(f"
+{bcolors.BOLD}DNS Configuration:{bcolors.ENDC}")
     try:
         print("/etc/resolv.conf contents:")
         with open('/etc/resolv.conf', 'r') as f:
             print(f.read())
     except Exception as e:
         print(f"Error reading resolv.conf: {e}")
-    
+
     # 3. systemd-resolved status
     run_cmd(['systemctl', 'status', 'systemd-resolved', '--no-pager'], "systemd-resolved status")
-    
+
     # 4. Docker status
     run_cmd(['systemctl', 'status', 'docker', '--no-pager'], "Docker status")
-    
+
     # 5. Tor status
     run_cmd(['systemctl', 'status', 'tor', '--no-pager'], "Tor service status")
-    
+
     # 6. Check listening ports
-    print(f"\n{bcolors.BOLD}Listening ports (relevant to TorGhost):{bcolors.ENDC}")
+    print(f"
+{bcolors.BOLD}Listening ports (relevant to TorGhost):{bcolors.ENDC}")
     ports = ['53', '5353', '9040', '9050', '9051']
     for port in ports:
         try:
@@ -1485,18 +1360,20 @@ def diagnose_system():
                 print(f"Port {port}: Not listening")
         except Exception as e:
             print(f"Error checking port {port}: {e}")
-    
+
     # 7. iptables rules
-    print(f"\n{bcolors.BOLD}Current iptables NAT rules:{bcolors.ENDC}")
+    print(f"
+{bcolors.BOLD}Current iptables NAT rules:{bcolors.ENDC}")
     try:
         result = subprocess.run(['iptables', '-t', 'nat', '-L', '-n', '-v'], 
                               capture_output=True, text=True, timeout=10)
         print(result.stdout)
     except Exception as e:
         print(f"Error getting iptables rules: {e}")
-    
+
     # 8. Check for TorGhost markers
-    print(f"\n{bcolors.BOLD}TorGhost markers and checkpoints:{bcolors.ENDC}")
+    print(f"
+{bcolors.BOLD}TorGhost markers and checkpoints:{bcolors.ENDC}")
     markers = [
         RESOLVED_STOP_MARKER,
         DOCKER_STOP_MARKER,
@@ -1505,7 +1382,6 @@ def diagnose_system():
         RESOLVED_BACKUP_FILE,
         TORRC_BACKUP_PATH
     ]
-    
     for marker in markers:
         if os.path.exists(marker):
             print(f"{bcolors.GREEN}✓ Found: {marker}{bcolors.ENDC}")
@@ -1520,7 +1396,7 @@ def diagnose_system():
                 print(f"  Error reading file: {e}")
         else:
             print(f"{bcolors.RED}✗ Missing: {marker}{bcolors.ENDC}")
-    
+
     info("Diagnostics complete. Review the output above for potential issues.")
 
 def wait_for_bootstrap(timeout=180, poll_interval=2):
@@ -1528,35 +1404,27 @@ def wait_for_bootstrap(timeout=180, poll_interval=2):
     Wait for Tor to finish bootstrapping.
     """
     info("Waiting for Tor to bootstrap...")
-    
     deadline = time.time() + timeout
     last_progress = -1
-    
     while time.time() < deadline:
         try:
             with Controller.from_port(port=9051) as controller:
                 controller.authenticate()
-                
                 # Get bootstrap status
                 bootstrap_status = controller.get_info("status/bootstrap-phase")
                 progress_match = re.search(r'PROGRESS=(\d+)', bootstrap_status)
-                
                 if progress_match:
                     progress = int(progress_match.group(1))
-                    
                     # Only print if progress has changed significantly
                     if progress != last_progress and (progress % 10 == 0 or progress > last_progress):
                         info(f"Tor bootstrap progress: {progress}%")
                         last_progress = progress
-                    
                     if progress >= 100:
                         success("Tor bootstrap completed (100%)")
                         return True
         except Exception as e:
             debug(f"Error checking bootstrap status: {e}")
-        
         time.sleep(poll_interval)
-    
     warn("Tor bootstrap timeout reached")
     return False
 
@@ -1565,19 +1433,18 @@ def main():
     # Setup signal handler for clean shutdown
     signal.signal(signal.SIGINT, sigint_handler)
     signal.signal(signal.SIGTERM, lambda signum, frame: shutdown())
-    
+
     # Print warning
     print_dev_warning()
-    
+
     # Check root privileges for commands that need them
     command = sys.argv[1].lower() if len(sys.argv) > 1 else 'status'
     requires_root = ['start', 'stop', 'switch', 'diag', 'diagnose', 'check-leak']
-    
     if command in requires_root and os.geteuid() != 0:
         print(f"{bcolors.RED}{bcolors.BOLD}You must run this command as root.{bcolors.ENDC}")
         print("Use sudo: sudo torghost", command)
         sys.exit(1)
-    
+
     # Command dispatch
     if command == "start":
         start_torghost()
@@ -1592,7 +1459,6 @@ def main():
                     interval = int(sys.argv[3])
                 except ValueError:
                     warn("Invalid interval, using default 10 seconds")
-        
         stop_torghost(monitor=monitor_mode, interval=interval)
     elif command == "switch":
         switch_tor()
@@ -1607,7 +1473,6 @@ def main():
                 interval = int(sys.argv[2])
             except ValueError:
                 warn("Invalid interval, using default 10 seconds")
-        
         # This would call a leak checking function (not fully implemented in this version)
         info(f"Leak checking not fully implemented in this version. Use 'check-tor' command instead.")
     else:
