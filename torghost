@@ -806,8 +806,8 @@ def restore_system_state():
             warn("Could not restore original resolv.conf, creating a default one")
             try:
                 with open('/etc/resolv.conf', 'w') as f:
-                    f.write("nameserver 1.1.1.1")
-                    f.write("nameserver 8.8.8.8")
+                    f.write("nameserver 1.1.1.1\n")
+                    f.write("nameserver 8.8.8.8\n")
                 success("Created default resolv.conf")
                 restore_results['resolv_conf'] = True
             except Exception as e:
@@ -1174,8 +1174,8 @@ def stop_torghost(monitor=False, interval=10):
         warn("Could not restore original resolv.conf, creating a default one")
         try:
             with open('/etc/resolv.conf', 'w') as f:
-                f.write("nameserver 1.1.1.1")
-                f.write("nameserver 8.8.8.8")
+                f.write("nameserver 1.1.1.1\n")
+                f.write("nameserver 8.8.8.8\n")
             success("Created default resolv.conf")
         except Exception as e:
             error(f"Failed to create default resolv.conf: {e}", fatal=True)
