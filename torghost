@@ -447,8 +447,7 @@ def stop_systemd_resolved():
         subprocess.run(['systemctl', 'stop', 'systemd-resolved.socket'], check=False, timeout=10)
         # Create marker file
         with open(RESOLVED_STOP_MARKER, 'w') as f:
-            f.write(f"stopped at {time.time()}
-")
+            f.write(f"stopped at {time.time()}")
         create_checkpoint('resolved_stopped', {'time': time.time()})
         success("systemd-resolved stopped and masked")
         return True
