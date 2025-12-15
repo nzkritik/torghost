@@ -366,8 +366,7 @@ def stop_docker_and_wait(timeout=15):
             if not is_docker_active():
                 try:
                     with open(DOCKER_STOP_MARKER, 'w') as f:
-                        f.write(f"stopped at {time.time()}
-")
+                        f.write(f"stopped at {time.time()}")
                     create_checkpoint('docker_stopped', {'time': time.time()})
                     success("Docker stopped (marker written).")
                     # Backup and clean nat table
@@ -542,10 +541,8 @@ def configure_tor_dns():
     try:
         # Ensure /etc/resolv.conf points to Tor
         with open('/etc/resolv.conf', 'w') as f:
-            f.write("nameserver 127.0.0.1
-")
-            f.write("options timeout:1
-")
+            f.write("nameserver 127.0.0.1")
+            f.write("options timeout:1")
         success("Configured /etc/resolv.conf to use Tor DNS")
         return True
     except Exception as e:
@@ -583,8 +580,7 @@ def set_tor_dnsport(port):
         new_lines = [line for line in lines if not re.match(r'^\s*#?\s*DNSPort\b', line)]
 
         # Add our DNSPort setting
-        new_lines.append(f'DNSPort 127.0.0.1:{port}
-')
+        new_lines.append(f'DNSPort 127.0.0.1:{port}')
 
         # Write updated config
         with open(TORRC_PATH, 'w') as f:
@@ -615,8 +611,7 @@ def ensure_tor_config():
         # Remove any existing TorGhost block
         if TORRC_MARKER in current_config:
             pre_marker = current_config.split(TORRC_MARKER)[0]
-            current_config = pre_marker.rstrip() + "
-"
+            current_config = pre_marker.rstrip() + ""
 
         # Add our configuration block
         current_config += TORCONTENT
@@ -642,8 +637,7 @@ def detect_nat_conflicts():
             capture_output=True, text=True, timeout=10)
         if result.stdout.strip():
             warn("Existing NAT REDIRECT rules detected:")
-            for line in result.stdout.strip().split('
-'):
+            for line in result.stdout.strip().split(''):
                 warn(f"  {line}")
             return True # Conflict found
         # Check for PREROUTING rules that might intercept traffic
@@ -652,8 +646,7 @@ def detect_nat_conflicts():
             capture_output=True, text=True, timeout=10)
         if result.stdout.strip():
             warn("Docker PREROUTING rules detected (may cause NAT loops):")
-            for line in result.stdout.strip().split('
-'):
+            for line in result.stdout.strip().split(''):
                 warn(f"  {line}")
             return True # Conflict found
         return False # No conflict found
@@ -814,10 +807,8 @@ def restore_system_state():
             warn("Could not restore original resolv.conf, creating a default one")
             try:
                 with open('/etc/resolv.conf', 'w') as f:
-                    f.write("nameserver 1.1.1.1
-")
-                    f.write("nameserver 8.8.8.8
-")
+                    f.write("nameserver 1.1.1.1")
+                    f.write("nameserver 8.8.8.8")
                 success("Created default resolv.conf")
                 restore_results['resolv_conf'] = True
             except Exception as e:
@@ -881,15 +872,11 @@ def _configure_and_start_tor_with_dns():
         success("Tor service started and verified as active")
         create_checkpoint('tor_started', {'time': time.time()})
     except Exception as e:
-        error(f"Failed to start Tor service: {e}
-"
+        error(f"Failed to start Tor service: {e}"
              "Check journalctl -u tor for details. "
-             "Common issues:
-"
-             "  - Port conflicts (another service using 9040, 9050, 9051)
-"
-             "  - Missing permissions on /var/lib/tor or /run/tor
-"
+             "Common issues:"
+             "  - Port conflicts (another service using 9040, 9050, 9051)"
+             "  - Missing permissions on /var/lib/tor or /run/tor"
              "  - Configuration errors in /etc/tor/torrc", 
              fatal=True)
 
@@ -984,10 +971,8 @@ def prepare_system_for_tor():
             os.remove('/etc/resolv.conf')
         # Create a clean resolv.conf
         with open('/etc/resolv.conf', 'w') as f:
-            f.write("nameserver 127.0.0.1
-")
-            f.write("options timeout:1
-")
+            f.write("nameserver 127.0.0.1")
+            f.write("options timeout:1")
         success("Created clean /etc/resolv.conf pointing to localhost")
     except Exception as e:
         error(f"Failed to create clean resolv.conf: {e}", fatal=True)
@@ -1190,10 +1175,8 @@ def stop_torghost(monitor=False, interval=10):
         warn("Could not restore original resolv.conf, creating a default one")
         try:
             with open('/etc/resolv.conf', 'w') as f:
-                f.write("nameserver 1.1.1.1
-")
-                f.write("nameserver 8.8.8.8
-")
+                f.write("nameserver 1.1.1.1")
+                f.write("nameserver 8.8.8.8")
             success("Created default resolv.conf")
         except Exception as e:
             error(f"Failed to create default resolv.conf: {e}", fatal=True)
@@ -1268,8 +1251,7 @@ def show_status():
     Show current TorGhost status.
     """
     logo()
-    print(f"{bcolors.BOLD}TorGhost Status:{bcolors.ENDC}
-")
+    print(f"{bcolors.BOLD}TorGhost Status:{bcolors.ENDC}")
     # Check if TorGhost is active (look for checkpoints or markers)
     is_active = False
     markers = [
@@ -1295,12 +1277,10 @@ def show_status():
     print(f"Current Public IP: {bcolors.GREEN}{current_ip}{bcolors.ENDC}")
 
     if is_active:
-        print(f"
-{bcolors.YELLOW}TorGhost is currently active. All traffic is being routed through Tor.{bcolors.ENDC}")
+        print(f"{bcolors.YELLOW}TorGhost is currently active. All traffic is being routed through Tor.{bcolors.ENDC}")
         print(f"Run 'sudo torghost stop' to restore normal networking.")
     else:
-        print(f"
-{bcolors.GREEN}TorGhost is not active. System is using normal networking.{bcolors.ENDC}")
+        print(f"{bcolors.GREEN}TorGhost is not active. System is using normal networking.{bcolors.ENDC}")
         print(f"Run 'sudo torghost start' to route all traffic through Tor.")
 
 def diagnose_system():
@@ -1310,8 +1290,7 @@ def diagnose_system():
     logo()
     info("Running comprehensive diagnostics...")
     def run_cmd(cmd, description):
-        print(f"
-{bcolors.BOLD}{description}:{bcolors.ENDC}")
+        print(f"{bcolors.BOLD}{description}:{bcolors.ENDC}")
         try:
             result = subprocess.run(cmd, capture_output=True, text=True, timeout=15)
             print(result.stdout)
@@ -1325,8 +1304,7 @@ def diagnose_system():
     run_cmd(['ip', 'addr', 'show'], "Network interfaces")
 
     # 2. DNS configuration
-    print(f"
-{bcolors.BOLD}DNS Configuration:{bcolors.ENDC}")
+    print(f"{bcolors.BOLD}DNS Configuration:{bcolors.ENDC}")
     try:
         print("/etc/resolv.conf contents:")
         with open('/etc/resolv.conf', 'r') as f:
@@ -1344,8 +1322,7 @@ def diagnose_system():
     run_cmd(['systemctl', 'status', 'tor', '--no-pager'], "Tor service status")
 
     # 6. Check listening ports
-    print(f"
-{bcolors.BOLD}Listening ports (relevant to TorGhost):{bcolors.ENDC}")
+    print(f"{bcolors.BOLD}Listening ports (relevant to TorGhost):{bcolors.ENDC}")
     ports = ['53', '5353', '9040', '9050', '9051']
     for port in ports:
         try:
@@ -1360,8 +1337,7 @@ def diagnose_system():
             print(f"Error checking port {port}: {e}")
 
     # 7. iptables rules
-    print(f"
-{bcolors.BOLD}Current iptables NAT rules:{bcolors.ENDC}")
+    print(f"{bcolors.BOLD}Current iptables NAT rules:{bcolors.ENDC}")
     try:
         result = subprocess.run(['iptables', '-t', 'nat', '-L', '-n', '-v'], 
                               capture_output=True, text=True, timeout=10)
@@ -1370,8 +1346,7 @@ def diagnose_system():
         print(f"Error getting iptables rules: {e}")
 
     # 8. Check for TorGhost markers
-    print(f"
-{bcolors.BOLD}TorGhost markers and checkpoints:{bcolors.ENDC}")
+    print(f"{bcolors.BOLD}TorGhost markers and checkpoints:{bcolors.ENDC}")
     markers = [
         RESOLVED_STOP_MARKER,
         DOCKER_STOP_MARKER,
