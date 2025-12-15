@@ -214,6 +214,31 @@ def get_ip():
     warn("Unable to determine external IP after multiple attempts")
     return "Unknown"
 
+def ensure_tor_runtime_dir():
+    """Create and secure the Tor runtime directory in /run"""
+    tor_runtime_dir = "/run/tor"
+    try:
+        if not os.path.exists(tor_runtime_dir):
+            os.makedirs(tor_runtime_dir, exist_ok=True)
+            # Get tor user UID/GID if available
+            try:
+                tor_uid = int(subprocess.run(['id', '-u', 'tor'], 
+                                           capture_output=True, text=True).stdout.strip())
+                tor_gid = int(subprocess.run(['id', '-g', 'tor'], 
+                                           capture_output=True, text=True).stdout.strip())
+                os.chown(tor_runtime_dir, tor_uid, tor_gid)
+            except Exception:
+                # Fall back to root ownership if tor user not found
+                os.chown(tor_runtime_dir, 0, 0)
+            os.chmod(tor_runtime_dir, 0o700)
+            info(f"Created Tor runtime directory: {tor_runtime_dir}")
+            return True
+        else:
+            info(f"Tor runtime directory already exists: {tor_runtime_dir}")
+            return True
+    except Exception as e:
+        error(f"Failed to create Tor runtime directory: {e}", fatal=True)
+
 def prepare_system_for_tor():
     """Completely prepare the system for Tor by stopping interfering services."""
     info("Preparing system for Tor by stopping interfering services...")
@@ -1014,9 +1039,14 @@ def restore_system_state():
 
 # --- Core operational functions ----------------------------------------------
 def start_torghost():
-    """Start TorGhost with comprehensive pre-checks and conflict resolution."""
+    """
+    Start TorGhost with all necessary preparatory steps
+    """
     logo()
-    info("Starting TorGhost - routing all traffic through Tor")
+    info("Starting TorGhost...")
+    
+    # CRITICAL: Create Tor runtime directory FIRST
+    ensure_tor_runtime_dir()
     
     # --- CRITICAL PRE-START CHECKS ---
     # 1. Stop Docker completely with thorough cleanup
