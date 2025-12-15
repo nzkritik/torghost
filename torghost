@@ -633,6 +633,8 @@ def ensure_tor_config():
 
 def detect_nat_conflicts():
     """Detect existing NAT rules that might conflict with TorGhost."""
+    conflicts_found = False
+
     try:
         # Check for existing REDIRECT rules
         result = subprocess.run(['bash', '-c',
@@ -643,7 +645,8 @@ def detect_nat_conflicts():
             for line in result.stdout.strip().split('\n'):
                 if line.strip():  # Only process non-empty lines
                     warn(f"  {line}")
-            return True # Conflict found
+            conflicts_found = True
+
         # Check for PREROUTING rules that might intercept traffic
         result = subprocess.run(['bash', '-c',
             "iptables -t nat -L PREROUTING -n -v | grep DOCKER || true"],
@@ -653,10 +656,22 @@ def detect_nat_conflicts():
             for line in result.stdout.strip().split('\n'):
                 if line.strip():  # Only process non-empty lines
                     warn(f"  {line}")
-            return True # Conflict found
-        return False # No conflict found
+            conflicts_found = True
+
+        # Check for services using ports that Tor needs
+        result = subprocess.run(['ss', '-tuln'], capture_output=True, text=True, timeout=10)
+        if result.returncode == 0:
+            tor_ports = ['9050', '9051', '9040', '53', '5353']
+            for line in result.stdout.split('\n'):
+                for port in tor_ports:
+                    if f':{port}' in line or f'.{port}' in line:
+                        if '127.0.0.1' in line or '0.0.0.0' in line:  # Listening on local interfaces
+                            warn(f"Port {port} is in use by another service: {line.strip()}")
+                            conflicts_found = True
+
+        return conflicts_found
     except Exception as e:
-        warn(f"Could not inspect NAT rules: {e}")
+        warn(f"Could not inspect NAT rules or port usage: {e}")
         return True # Assume conflict on error
 
 def debug(msg):
@@ -826,13 +841,37 @@ def restore_system_state():
     except Exception as e:
         warn(f"Error restoring resolv.conf: {e}")
 
-    # 3. Restore systemd-resolved if we stopped it
+    # 3. Restore systemd-resolved if we stopped it, or ensure it's in proper state
     try:
-        restore_results['resolved'] = restore_systemd_resolved()
-        if restore_results['resolved']:
-            success("Restored systemd-resolved service")
+        # First, check if we have a marker file indicating we stopped it
+        if os.path.exists(RESOLVED_STOP_MARKER):
+            restore_results['resolved'] = restore_systemd_resolved()
+            if restore_results['resolved']:
+                success("Restored systemd-resolved service")
+        else:
+            # No marker file, but if systemd-resolved was masked by us (in a previous failed attempt),
+            # we should unmask it to restore normal operation
+            info("Checking if systemd-resolved needs unmasking...")
+            # Check the service status - if it's masked, unmask it
+            result = subprocess.run(['systemctl', 'is-enabled', 'systemd-resolved'],
+                                  capture_output=True, text=True, timeout=10)
+            if result.stdout.strip() == 'masked':
+                info("systemd-resolved is currently masked, unmasking it...")
+                subprocess.run(['systemctl', 'unmask', 'systemd-resolved'], check=False, timeout=10)
+                subprocess.run(['systemctl', 'start', 'systemd-resolved'], check=False, timeout=10)
+                success("systemd-resolved unmasked and started")
+                restore_results['resolved'] = True
+            else:
+                info("systemd-resolved is not masked, leaving as-is")
     except Exception as e:
-        warn(f"Error restoring systemd-resolved: {e}")
+        warn(f"Error handling systemd-resolved during restore: {e}")
+        # Try a force start anyway
+        try:
+            subprocess.run(['systemctl', 'start', 'systemd-resolved'], check=False, timeout=10)
+            success("Started systemd-resolved service")
+            restore_results['resolved'] = True
+        except Exception as e2:
+            warn(f"Could not start systemd-resolved: {e2}")
 
     # 4. Restore Docker if we stopped it
     try:
@@ -874,6 +913,12 @@ def _configure_and_start_tor_with_dns():
     # 2. Start Tor service
     info("Starting Tor service...")
     try:
+        # First, check if the required ports are free before starting Tor
+        info("Checking if Tor ports are available...")
+        for port in [9050, 9051, 9040, 5353]:
+            if wait_for_port('127.0.0.1', port, timeout=1):  # Check if already listening
+                warn(f"Port {port} is already in use before starting Tor")
+
         subprocess.run(['systemctl', 'restart', 'tor'], check=True, timeout=30)
         # Verify Tor service is running
         tor_status_result = subprocess.run(['systemctl', 'is-active', 'tor'], capture_output=True, text=True, timeout=10)
@@ -882,20 +927,33 @@ def _configure_and_start_tor_with_dns():
         success("Tor service started and verified as active")
         create_checkpoint('tor_started', {'time': time.time()})
     except Exception as e:
-        error(f"Failed to start Tor service: {e}"
+        error(f"Failed to start Tor service: {e}. "
              "Check journalctl -u tor for details. "
-             "Common issues:"
-             "  - Port conflicts (another service using 9040, 9050, 9051)"
-             "  - Missing permissions on /var/lib/tor or /run/tor"
-             "  - Configuration errors in /etc/tor/torrc", 
+             "Common issues: "
+             "- Port conflicts (another service using 9040, 9050, 9051) "
+             "- Missing permissions on /var/lib/tor or /run/tor "
+             "- Configuration errors in /etc/tor/torrc",
              fatal=True)
 
-    # 3. Wait for Tor control port
-    info("Waiting for Tor control port to be ready...")
+    # 3. Wait for Tor required ports to be ready
+    info("Waiting for Tor ports to be ready...")
+    # Wait for control port (9051)
     if not wait_for_port('127.0.0.1', 9051, timeout=60):
-        error("Tor control port did not become available. Check 'journalctl -u tor' for errors.", 
+        error("Tor control port 9051 did not become available. Check 'journalctl -u tor' for errors.",
              fatal=True)
-    success("Tor control port is ready")
+    success("Tor control port 9051 is ready")
+
+    # Wait for SOCKS port (9050)
+    if not wait_for_port('127.0.0.1', 9050, timeout=30):
+        error("Tor SOCKS port 9050 did not become available. Check 'journalctl -u tor' for errors.",
+             fatal=True)
+    success("Tor SOCKS port 9050 is ready")
+
+    # Wait for transparent proxy port (9040)
+    if not wait_for_port('127.0.0.1', 9040, timeout=30):
+        error("Tor transparent proxy port 9040 did not become available. Check 'journalctl -u tor' for errors.",
+             fatal=True)
+    success("Tor transparent proxy port 9040 is ready")
 
     # 4. Wait for Tor bootstrap
     if not wait_for_bootstrap(timeout=180):
@@ -960,18 +1018,49 @@ def prepare_system_for_tor():
 
     # 2. Stop and mask systemd-resolved completely
     try:
-        # Stop the service and its socket
-        subprocess.run(['systemctl', 'stop', 'systemd-resolved'], check=False)
-        subprocess.run(['systemctl', 'stop', 'systemd-resolved.socket'], check=False)
-        subprocess.run(['systemctl', 'mask', 'systemd-resolved'], check=False)
+        # Check current state first
+        result = subprocess.run(['systemctl', 'is-active', 'systemd-resolved'],
+                               capture_output=True, text=True, timeout=10)
+        current_state = result.stdout.strip()
+        if current_state == 'active':
+            info("systemd-resolved is currently active, stopping it...")
+        else:
+            info(f"systemd-resolved state: {current_state}")
+
+        # Stop the service and its socket (if they exist)
+        subprocess.run(['systemctl', 'stop', 'systemd-resolved'], check=False, timeout=10)
+        # systemd-resolved.socket may not exist on all systems, so we check if it exists first
+        result = subprocess.run(['systemctl', 'list-unit-files', 'systemd-resolved.socket'],
+                               capture_output=True, text=True, timeout=10)
+        if 'systemd-resolved.socket' in result.stdout:
+            subprocess.run(['systemctl', 'stop', 'systemd-resolved.socket'], check=False, timeout=10)
+
+        # Mask the service to prevent it from starting again
+        subprocess.run(['systemctl', 'mask', 'systemd-resolved'], check=False, timeout=10)
+        # Ensure it's also disabled (in case it was enabled)
+        subprocess.run(['systemctl', 'disable', 'systemd-resolved'], check=False, timeout=10)
+
+        # Force kill any remaining systemd-resolve processes that might still be using port 53
+        subprocess.run(['pkill', '-f', 'systemd-resolve'], check=False, timeout=5)
+        time.sleep(1)  # Give a brief moment for processes to terminate
+
         # Verify it's not running
         result = subprocess.run(['systemctl', 'is-active', 'systemd-resolved'],
                                capture_output=True, text=True, timeout=10)
         if result.stdout.strip() == 'active':
             warn("systemd-resolved is still active after stop attempt!")
-        success("systemd-resolved stopped and masked")
+            # Try a more forceful approach
+            subprocess.run(['systemctl', 'kill', 'systemd-resolved'], check=False, timeout=10)
+            time.sleep(2)
+            # Verify again
+            result = subprocess.run(['systemctl', 'is-active', 'systemd-resolved'],
+                                   capture_output=True, text=True, timeout=10)
+            if result.stdout.strip() == 'active':
+                error("Failed to stop systemd-resolved completely!", fatal=True)
+        else:
+            success("systemd-resolved stopped and masked")
     except Exception as e:
-        warn(f"Error stopping systemd-resolved: {e}")
+        error(f"Error stopping systemd-resolved: {e}", fatal=True)
 
     # 3. Ensure resolv.conf is a regular file pointing to localhost
     try:
@@ -1444,9 +1533,6 @@ def main():
     signal.signal(signal.SIGINT, sigint_handler)
     signal.signal(signal.SIGTERM, lambda signum, frame: shutdown())
 
-    # Print warning
-    print_dev_warning()
-
     # Check root privileges for commands that need them
     command = sys.argv[1].lower() if len(sys.argv) > 1 else 'status'
     requires_root = ['start', 'stop', 'switch', 'diag', 'diagnose', 'check-leak']
@@ -1457,6 +1543,7 @@ def main():
 
     # Command dispatch
     if command == "start":
+        print_dev_warning()
         start_torghost()
     elif command == "stop":
         # Check for monitor mode
@@ -1487,6 +1574,7 @@ def main():
         info(f"Starting continuous DNS leak monitoring (interval: {interval}s)...")
         check_dns_leaks(interval)
     else:
+        print_dev_warning()
         usage()
 
 if __name__ == "__main__":
