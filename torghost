@@ -120,8 +120,7 @@ def shutdown():
     """
     Perform any necessary cleanup and exit the program.
     """
-    print(f"
-{t()} Shutting down torghost")
+    print(f"{t()} Shutting down torghost")
     restore_system_state()
     sys.exit(0)
 def logo():
