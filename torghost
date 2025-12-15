@@ -916,13 +916,54 @@ def _configure_and_start_tor_with_dns():
     # 2. Start Tor service
     info("Starting Tor service...")
     try:
-        # First, check if the required ports are free before starting Tor
-        info("Checking if Tor ports are available...")
-        for port in [9050, 9051, 9040, 5353]:
-            if wait_for_port('127.0.0.1', port, timeout=1):  # Check if already listening
-                warn(f"Port {port} is already in use before starting Tor")
+        # First, force stop any existing Tor process to free up ports
+        info("Stopping any existing Tor service to free ports...")
+        subprocess.run(['systemctl', 'stop', 'tor'], check=False, timeout=10)
+        # Wait a moment for ports to be released
+        time.sleep(2)
 
+        # Check for any remaining Tor processes
+        subprocess.run(['pkill', '-f', 'tor'], check=False, timeout=5)
+        time.sleep(1)
+
+        # Now check if the required ports are free using ss (more reliable than wait_for_port)
+        info("Checking if Tor ports are available...")
+        result = subprocess.run(['ss', '-tuln'], capture_output=True, text=True, timeout=10)
+        for port in [9050, 9051, 9040, 5353]:
+            for line in result.stdout.split('\n'):
+                if f':{port}' in line and ('LISTEN' in line or 'UNCONN' in line):
+                    # Check if it's Tor using the port (not a conflict) or another service
+                    if 'tor' not in line.lower():
+                        error(f"Port {port} is in use by another service: {line.strip()}", fatal=True)
+
+        # Explicitly check Tor configuration before starting
+        info("Verifying Tor configuration is valid...")
+        if not os.path.exists('/etc/tor/torrc'):
+            error("Tor configuration file /etc/tor/torrc does not exist", fatal=True)
+
+        # Set proper permissions for Tor directories before starting
+        info("Setting proper permissions for Tor directories...")
+        try:
+            import pwd
+            tor_uid = pwd.getpwnam('tor').pw_uid
+            tor_gid = pwd.getpwnam('tor').pw_gid
+
+            # Ensure Tor directories have correct ownership
+            tor_dirs = ['/var/lib/tor', '/run/tor', '/etc/tor']
+            for tor_dir in tor_dirs:
+                if os.path.exists(tor_dir):
+                    os.chown(tor_dir, tor_uid, tor_gid)
+        except KeyError:
+            warn("Tor user not found, skipping permission setup")
+        except Exception as perm_error:
+            warn(f"Could not set Tor directory permissions: {perm_error}")
+
+        # Start Tor service
+        subprocess.run(['systemctl', 'start', 'tor'], check=True, timeout=30)
+        # Wait briefly then restart to apply our configuration
+        time.sleep(1)
         subprocess.run(['systemctl', 'restart', 'tor'], check=True, timeout=30)
+
         # Verify Tor service is running
         tor_status_result = subprocess.run(['systemctl', 'is-active', 'tor'], capture_output=True, text=True, timeout=10)
         if tor_status_result.stdout.strip() != 'active':
@@ -935,7 +976,8 @@ def _configure_and_start_tor_with_dns():
              "Common issues: "
              "- Port conflicts (another service using 9040, 9050, 9051) "
              "- Missing permissions on /var/lib/tor or /run/tor "
-             "- Configuration errors in /etc/tor/torrc",
+             "- Configuration errors in /etc/tor/torrc "
+             "- Tor service not installed or missing dependencies",
              fatal=True)
 
     # 3. Wait for Tor required ports to be ready
