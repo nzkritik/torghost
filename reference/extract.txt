@@ -1,0 +1,156 @@
+[H[2J[3J[31m[1m
+
+▄▄▄▄▄▄▄▄▄           ▄▄▄▄▄▄▄  ▄▄                      
+▀▀▀███▀▀▀          ███▀▀▀▀▀  ██                 ██   
+   ███ ▄███▄ ████▄ ███       ████▄ ▄███▄ ▄█▀▀▀ ▀██▀▀ 
+   ███ ██ ██ ██ ▀▀ ███  ███▀ ██ ██ ██ ██ ▀███▄  ██   
+   ███ ▀███▀ ██    ▀██████▀  ██ ██ ▀███▀ ▄▄▄█▀  ██   
+    v3.1 - fixed version for Arch Linux
+    
+[0m
+[22:53:14] [94mRunning comprehensive diagnostics...[0m
+[1mNetwork interfaces:[0m
+1: lo: <LOOPBACK,UP,LOWER_UP> mtu 65536 qdisc noqueue state UNKNOWN group default qlen 1000
+    link/loopback 00:00:00:00:00:00 brd 00:00:00:00:00:00
+    inet 127.0.0.1/8 scope host lo
+       valid_lft forever preferred_lft forever
+    inet6 ::1/128 scope host noprefixroute 
+       valid_lft forever preferred_lft forever
+3: wlan0: <BROADCAST,MULTICAST,UP,LOWER_UP> mtu 1500 qdisc noqueue state UP group default qlen 1000
+    link/ether 10:91:d1:e8:e6:03 brd ff:ff:ff:ff:ff:ff
+    inet 192.168.5.159/22 metric 600 brd 192.168.7.255 scope global dynamic wlan0
+       valid_lft 13806sec preferred_lft 13806sec
+    inet6 2406:5a00:481a:8a00:1291:d1ff:fee8:e603/64 scope global dynamic mngtmpaddr noprefixroute 
+       valid_lft 435sec preferred_lft 435sec
+    inet6 fd7e:15d9:315e:1:1291:d1ff:fee8:e603/64 scope global dynamic mngtmpaddr noprefixroute 
+       valid_lft 2591837sec preferred_lft 604637sec
+    inet6 fe80::1291:d1ff:fee8:e603/64 scope link proto kernel_ll 
+       valid_lft forever preferred_lft forever
+4: docker0: <NO-CARRIER,BROADCAST,MULTICAST,UP> mtu 1500 qdisc noqueue state DOWN group default 
+    link/ether b2:12:e9:e3:a7:89 brd ff:ff:ff:ff:ff:ff
+    inet 172.17.0.1/16 brd 172.17.255.255 scope global docker0
+       valid_lft forever preferred_lft forever
+
+[1mDNS Configuration:[0m
+/etc/resolv.conf contents:
+# This is /run/systemd/resolve/stub-resolv.conf managed by man:systemd-resolved(8).
+# Do not edit.
+#
+# This file might be symlinked as /etc/resolv.conf. If you're looking at
+# /etc/resolv.conf and seeing this text, you have followed the symlink.
+#
+# This is a dynamic resolv.conf file for connecting local clients to the
+# internal DNS stub resolver of systemd-resolved. This file lists all
+# configured search domains.
+#
+# Run "resolvectl status" to see details about the uplink DNS servers
+# currently in use.
+#
+# Third party programs should typically not access this file directly, but only
+# through the symlink at /etc/resolv.conf. To manage man:resolv.conf(5) in a
+# different way, replace this symlink by a static file or a different symlink.
+#
+# See man:systemd-resolved.service(8) for details about the supported modes of
+# operation for /etc/resolv.conf.
+
+nameserver 127.0.0.53
+options edns0 trust-ad
+search .
+
+[1msystemd-resolved status:[0m
+● systemd-resolved.service - Network Name Resolution
+     Loaded: loaded (/usr/lib/systemd/system/systemd-resolved.service; enabled; preset: enabled)
+     Active: active (running) since Mon 2025-12-15 22:52:01 NZDT; 1min 12s ago
+ Invocation: 22f3c5148e9247aa8e7a88aaed998c35
+TriggeredBy: ● systemd-resolved-monitor.socket
+             ● systemd-resolved-varlink.socket
+       Docs: man:systemd-resolved.service(8)
+             man:org.freedesktop.resolve1(5)
+             https://systemd.io/WRITING_NETWORK_CONFIGURATION_MANAGERS
+             https://systemd.io/WRITING_RESOLVER_CLIENTS
+   Main PID: 2687 (systemd-resolve)
+     Status: "Processing requests..."
+      Tasks: 1 (limit: 2322)
+     Memory: 3M (peak: 3.3M)
+        CPU: 23ms
+     CGroup: /system.slice/systemd-resolved.service
+             └─2687 /usr/lib/systemd/systemd-resolved
+
+Dec 15 22:52:01 omarchy systemd[1]: Starting Network Name Resolution...
+Dec 15 22:52:01 omarchy systemd-resolved[2687]: Positive Trust Anchors:
+Dec 15 22:52:01 omarchy systemd-resolved[2687]: . IN DS 20326 8 2 e06d44b80b8f1d39a95c0b0d7c65d08458e880409bbc683457104237c7f8ec8d
+Dec 15 22:52:01 omarchy systemd-resolved[2687]: . IN DS 38696 8 2 683d2d0acb8c9b712a1948b27f741219298d0a450d612c483af444a4c0fb2b16
+Dec 15 22:52:01 omarchy systemd-resolved[2687]: Negative trust anchors: home.arpa 10.in-addr.arpa 16.172.in-addr.arpa 17.172.in-addr.arpa 18.172.in-addr.arpa 19.172.in-addr.arpa 20.172.in-addr.arpa 21.172.in-addr.arpa 22.172.in-addr.arpa 23.172.in-addr.arpa 24.172.in-addr.arpa 25.172.in-addr.arpa 26.172.in-addr.arpa 27.172.in-addr.arpa 28.172.in-addr.arpa 29.172.in-addr.arpa 30.172.in-addr.arpa 31.172.in-addr.arpa 170.0.0.192.in-addr.arpa 171.0.0.192.in-addr.arpa 168.192.in-addr.arpa d.f.ip6.arpa ipv4only.arpa resolver.arpa corp home internal intranet lan local private test
+Dec 15 22:52:01 omarchy systemd-resolved[2687]: Using system hostname 'omarchy'.
+Dec 15 22:52:01 omarchy systemd[1]: Started Network Name Resolution.
+
+[1mDocker status:[0m
+○ docker.service - Docker Application Container Engine
+     Loaded: loaded (/usr/lib/systemd/system/docker.service; enabled; preset: disabled)
+    Drop-In: /etc/systemd/system/docker.service.d
+             └─no-block-boot.conf
+     Active: inactive (dead) since Mon 2025-12-15 22:52:01 NZDT; 1min 12s ago
+   Duration: 8min 52.365s
+ Invocation: cdbb473b93c1498ca158095759884f78
+TriggeredBy: ● docker.socket
+       Docs: https://docs.docker.com
+   Main PID: 768 (code=exited, status=0/SUCCESS)
+   Mem peak: 95.9M (swap: 10.8M)
+        CPU: 289ms
+
+Dec 15 22:43:09 omarchy dockerd[768]: time="2025-12-15T22:43:09.020765941+13:00" level=info msg="Daemon has completed initialization"
+Dec 15 22:43:09 omarchy dockerd[768]: time="2025-12-15T22:43:09.021354484+13:00" level=info msg="API listen on /run/docker.sock"
+Dec 15 22:43:09 omarchy systemd[1]: Started Docker Application Container Engine.
+Dec 15 22:52:01 omarchy systemd[1]: Stopping Docker Application Container Engine...
+Dec 15 22:52:01 omarchy dockerd[768]: time="2025-12-15T22:52:01.418077634+13:00" level=info msg="Processing signal 'terminated'"
+Dec 15 22:52:01 omarchy dockerd[768]: time="2025-12-15T22:52:01.428513737+13:00" level=info msg="stopping event stream following graceful shutdown" error="<nil>" module=libcontainerd namespace=moby
+Dec 15 22:52:01 omarchy dockerd[768]: time="2025-12-15T22:52:01.434340109+13:00" level=info msg="Daemon shutdown complete"
+Dec 15 22:52:01 omarchy systemd[1]: docker.service: Deactivated successfully.
+Dec 15 22:52:01 omarchy systemd[1]: Stopped Docker Application Container Engine.
+Dec 15 22:52:01 omarchy systemd[1]: docker.service: Consumed 289ms CPU time, 95.9M memory peak, 10.8M memory swap peak.
+
+[1mTor service status:[0m
+○ tor.service - Anonymizing overlay network for TCP
+     Loaded: loaded (/usr/lib/systemd/system/tor.service; disabled; preset: disabled)
+     Active: inactive (dead)
+
+[1mListening ports (relevant to TorGhost):[0m
+Port 53:
+Netid State  Recv-Q Send-Q Local Address:Port Peer Address:PortProcess                                    
+udp   UNCONN 0      0         172.17.0.1:53        0.0.0.0:*    users:(("systemd-resolve",pid=2687,fd=26))
+udp   UNCONN 0      0         127.0.0.54:53        0.0.0.0:*    users:(("systemd-resolve",pid=2687,fd=24))
+udp   UNCONN 0      0      127.0.0.53%lo:53        0.0.0.0:*    users:(("systemd-resolve",pid=2687,fd=22))
+tcp   LISTEN 0      4096   127.0.0.53%lo:53        0.0.0.0:*    users:(("systemd-resolve",pid=2687,fd=23))
+tcp   LISTEN 0      4096      127.0.0.54:53        0.0.0.0:*    users:(("systemd-resolve",pid=2687,fd=25))
+tcp   LISTEN 0      4096      172.17.0.1:53        0.0.0.0:*    users:(("systemd-resolve",pid=2687,fd=27))
+Port 5353:
+Netid State  Recv-Q Send-Q Local Address:Port Peer Address:PortProcess                                
+udp   UNCONN 0      0            0.0.0.0:5353      0.0.0.0:*    users:(("avahi-daemon",pid=647,fd=12))
+udp   UNCONN 0      0               [::]:5353         [::]:*    users:(("avahi-daemon",pid=647,fd=13))
+Port 9040:
+Netid State Recv-Q Send-Q Local Address:Port Peer Address:PortProcess
+Port 9050:
+Netid State Recv-Q Send-Q Local Address:Port Peer Address:PortProcess
+Port 9051:
+Netid State Recv-Q Send-Q Local Address:Port Peer Address:PortProcess
+[1mCurrent iptables NAT rules:[0m
+Chain PREROUTING (policy ACCEPT 38 packets, 3577 bytes)
+ pkts bytes target     prot opt in     out     source               destination         
+
+Chain INPUT (policy ACCEPT 8 packets, 1507 bytes)
+ pkts bytes target     prot opt in     out     source               destination         
+
+Chain OUTPUT (policy ACCEPT 1 packets, 53 bytes)
+ pkts bytes target     prot opt in     out     source               destination         
+
+Chain POSTROUTING (policy ACCEPT 1 packets, 53 bytes)
+ pkts bytes target     prot opt in     out     source               destination         
+
+[1mTorGhost markers and checkpoints:[0m
+[31m✗ Missing: /run/torghost-stopped-systemd-resolved[0m
+[31m✗ Missing: /run/torghost-stopped-docker[0m
+[31m✗ Missing: /run/torghost/latest.json[0m
+[31m✗ Missing: /etc/tor/torghost-ipv6-backup[0m
+[31m✗ Missing: /etc/resolv.conf.bak-torghost[0m
+[31m✗ Missing: /etc/tor/torrc.bak-torghost[0m
+[22:53:14] [94mDiagnostics complete. Review the output above for potential issues.[0m

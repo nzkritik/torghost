@@ -636,26 +636,39 @@ def detect_nat_conflicts():
     conflicts_found = False
 
     try:
-        # Check for existing REDIRECT rules
+        # Check for existing REDIRECT rules that are NOT related to TorGhost
+        # We'll look for REDIRECT rules that might interfere with our setup
+        # Look specifically for lines that show actual redirect target rules
         result = subprocess.run(['bash', '-c',
-            "iptables -t nat -L OUTPUT -n -v | grep REDIRECT || true"],
+            "iptables -t nat -L OUTPUT -n -v 2>/dev/null | grep -E '\\bREDIRECT\\b' | grep -v 9040 | grep -v 5353 || true"],  # Exclude TorGhost-specific redirects
             capture_output=True, text=True, timeout=15)
-        if result.stdout.strip():
-            warn("Existing NAT REDIRECT rules detected:")
-            for line in result.stdout.strip().split('\n'):
-                if line.strip():  # Only process non-empty lines
-                    warn(f"  {line}")
+        lines = [line.strip() for line in result.stdout.strip().split('\n') if line.strip() and 'Chain' not in line and 'policy' not in line.lower() and 'target' not in line.lower()]
+        if lines:
+            warn("Existing NAT REDIRECT rules detected that may conflict:")
+            for line in lines:
+                warn(f"  {line}")
             conflicts_found = True
 
-        # Check for PREROUTING rules that might intercept traffic
+        # Check for PREROUTING rules that might intercept traffic (especially Docker)
         result = subprocess.run(['bash', '-c',
-            "iptables -t nat -L PREROUTING -n -v | grep DOCKER || true"],
+            "iptables -t nat -L PREROUTING -n -v 2>/dev/null | grep -i docker || true"],
             capture_output=True, text=True, timeout=15)
-        if result.stdout.strip():
+        lines = [line.strip() for line in result.stdout.strip().split('\n') if line.strip() and 'Chain' not in line and 'policy' not in line.lower()]
+        if lines:
             warn("Docker PREROUTING rules detected (may cause NAT loops):")
-            for line in result.stdout.strip().split('\n'):
-                if line.strip():  # Only process non-empty lines
-                    warn(f"  {line}")
+            for line in lines:
+                warn(f"  {line}")
+            conflicts_found = True
+
+        # Look for rules that redirect traffic to Tor (9040, 9050, etc.) - these would interfere
+        result = subprocess.run(['bash', '-c',
+            "iptables -t nat -L -n 2>/dev/null | grep -E '9040|9050|9051|5353' | grep -i redirect || true"],
+            capture_output=True, text=True, timeout=15)
+        lines = [line.strip() for line in result.stdout.strip().split('\n') if line.strip() and 'Chain' not in line and 'policy' not in line.lower()]
+        if lines:
+            warn("Existing NAT rules that redirect to Tor ports detected (may conflict):")
+            for line in lines:
+                warn(f"  {line}")
             conflicts_found = True
 
         # Check for services using ports that Tor needs
@@ -664,8 +677,10 @@ def detect_nat_conflicts():
             tor_ports = ['9050', '9051', '9040', '53', '5353']
             for line in result.stdout.split('\n'):
                 for port in tor_ports:
+                    # Don't flag loopback addresses as conflicts if they're for other services
                     if f':{port}' in line or f'.{port}' in line:
-                        if '127.0.0.1' in line or '0.0.0.0' in line:  # Listening on local interfaces
+                        # Only warn if it's not a Tor process and is listening on wildcard or localhost
+                        if ('127.0.0.1' in line or '0.0.0.0' in line) and 'tor' not in line.lower():
                             warn(f"Port {port} is in use by another service: {line.strip()}")
                             conflicts_found = True
 
